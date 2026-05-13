@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flight Deal Alert</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            line-height: 1.6;
+            color: #333333;
+            background-color: #f5f5f5;
+            margin: 0;
+            padding: 0;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background-color: #ffffff;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+        .header {
+            background-color: #1a73e8;
+            color: #ffffff;
+            padding: 24px;
+            text-align: center;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 22px;
+            font-weight: 600;
+        }
+        .header .route {
+            font-size: 28px;
+            margin-top: 8px;
+            font-weight: 700;
+        }
+        .header .dates {
+            font-size: 14px;
+            margin-top: 8px;
+            opacity: 0.9;
+        }
+        .section {
+            padding: 20px 24px;
+        }
+        .recommendation {
+            background-color: #f0f7ff;
+            border-left: 4px solid #1a73e8;
+            padding: 16px 20px;
+            margin: 20px 24px;
+            border-radius: 0 4px 4px 0;
+        }
+        .recommendation .badge {
+            display: inline-block;
+            background-color: #1a73e8;
+            color: #ffffff;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .recommendation .explanation {
+            margin-top: 10px;
+            font-size: 14px;
+            color: #555555;
+        }
+        .section-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: #333333;
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 2px solid #e0e0e0;
+        }
+        .flights-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 14px;
+        }
+        .flights-table th {
+            background-color: #f8f9fa;
+            padding: 10px 12px;
+            text-align: left;
+            font-weight: 600;
+            color: #555555;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+        }
+        .flights-table td {
+            padding: 12px;
+            border-bottom: 1px solid #eeeeee;
+        }
+        .flights-table tr:last-child td {
+            border-bottom: none;
+        }
+        .price {
+            font-weight: 700;
+            color: #1a73e8;
+            font-size: 16px;
+        }
+        .airline-name {
+            font-weight: 600;
+        }
+        .flight-number {
+            color: #777777;
+            font-size: 12px;
+        }
+        .times {
+            white-space: nowrap;
+        }
+        .premium-section {
+            background-color: #fdf8f0;
+            margin: 0;
+            padding: 20px 24px;
+        }
+        .premium-section .section-title {
+            border-bottom-color: #e8c87a;
+            color: #8b6914;
+        }
+        .premium-badge {
+            display: inline-block;
+            background-color: #f0e4c4;
+            color: #8b6914;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .footer {
+            padding: 16px 24px;
+            text-align: center;
+            font-size: 12px;
+            color: #999999;
+            border-top: 1px solid #eeeeee;
+        }
+        .no-options {
+            color: #777777;
+            font-style: italic;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header with route info -->
+        <div class="header">
+            <h1>✈️ Flight Deal Alert</h1>
+            <div class="route">{{ trip.origin }} → {{ trip.destination }}</div>
+            <div class="dates">{{ trip.earliest_departure.strftime('%b %d, %Y') }} – {{ trip.latest_departure.strftime('%b %d, %Y') }}</div>
+        </div>
+
+        <!-- Recommendation section -->
+        <div class="recommendation">
+            <span class="badge">{{ analysis.recommendation.replace('_', ' ') }}</span>
+            <div class="explanation">{{ analysis.explanation }}</div>
+        </div>
+
+        <!-- Target Fare (Main Cabin) section -->
+        <div class="section">
+            <div class="section-title">Target Fare — Main Cabin Options</div>
+            {% if main_cabin_options %}
+            <table class="flights-table">
+                <thead>
+                    <tr>
+                        <th>Flight</th>
+                        <th>Departure</th>
+                        <th>Arrival</th>
+                        <th>Price</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for flight in main_cabin_options[:3] %}
+                    <tr>
+                        <td>
+                            <span class="airline-name">{{ flight.airline }}</span><br>
+                            <span class="flight-number">{{ flight.flight_number }}</span>
+                        </td>
+                        <td class="times">{{ flight.departure_time }}</td>
+                        <td class="times">{{ flight.arrival_time }}</td>
+                        <td class="price">${{ "%.2f"|format(flight.price_cents / 100) }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <p class="no-options">No main cabin options available at this time.</p>
+            {% endif %}
+        </div>
+
+        <!-- Premium Fare section (separated) -->
+        {% if premium_highlights %}
+        <div class="premium-section">
+            <div class="section-title">Premium Fare — Upgrade Opportunities</div>
+            <table class="flights-table">
+                <thead>
+                    <tr>
+                        <th>Flight</th>
+                        <th>Class</th>
+                        <th>Departure</th>
+                        <th>Price</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for flight in premium_highlights %}
+                    <tr>
+                        <td>
+                            <span class="airline-name">{{ flight.airline }}</span><br>
+                            <span class="flight-number">{{ flight.flight_number }}</span>
+                        </td>
+                        <td><span class="premium-badge">{{ flight.fare_class.replace('_', ' ') }}</span></td>
+                        <td class="times">{{ flight.departure_time }}</td>
+                        <td class="price">${{ "%.2f"|format(flight.price_cents / 100) }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endif %}
+
+        <!-- Footer -->
+        <div class="footer">
+            <p>This alert was generated by Flight Deal Tracker.<br>
+            Prices are subject to change. Book soon for the best deal.</p>
+        </div>
+    </div>
+</body>
+</html>

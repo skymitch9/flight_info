@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+strawberry-graphql[fastapi]
+sqlalchemy[asyncio]
+asyncpg
+pydantic-settings
+httpx
+apscheduler
+structlog
+aiosmtplib
+jinja2

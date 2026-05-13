@@ -1,0 +1,363 @@
+/* Cyberpunk 2077 / Edgerunners Theme */
+
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;900&family=Rajdhani:wght@300;400;500;600;700&family=Share+Tech+Mono&display=swap');
+
+:root {
+  /* Cyberpunk 2077 Color Palette */
+  --cp-yellow: #FCEE09;
+  --cp-magenta: #FF003C;
+  --cp-cyan: #00F0FF;
+  --cp-blue: #1B1BFF;
+  --cp-purple: #9D00FF;
+  --cp-orange: #FF6B00;
+  
+  /* Backgrounds */
+  --cp-bg-dark: #0a0a0f;
+  --cp-bg-panel: #12121a;
+  --cp-bg-card: #1a1a2e;
+  --cp-bg-hover: #252540;
+  
+  /* Text */
+  --cp-text-primary: #e0e0e0;
+  --cp-text-secondary: #8888aa;
+  --cp-text-accent: #FCEE09;
+  
+  /* Borders & Glows */
+  --cp-border: #2a2a4a;
+  --cp-glow-yellow: 0 0 10px #FCEE09, 0 0 20px #FCEE0944;
+  --cp-glow-cyan: 0 0 10px #00F0FF, 0 0 20px #00F0FF44;
+  --cp-glow-magenta: 0 0 10px #FF003C, 0 0 20px #FF003C44;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Rajdhani', sans-serif;
+  background-color: var(--cp-bg-dark);
+  color: var(--cp-text-primary);
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* Scanline overlay effect */
+body::after {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 9999;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 0, 0, 0.03) 2px,
+    rgba(0, 0, 0, 0.03) 4px
+  );
+}
+
+/* Background image — drop your Cyberpunk wallpaper as hero-bg.jpg */
+body::before {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: -1;
+  opacity: 0.12;
+  background-image: url('/images/cyberpunk/1273308.jpg');
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  /* Fallback gradient if image not found */
+  background-color: var(--cp-bg-dark);
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: 'Orbitron', sans-serif;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+code, .mono {
+  font-family: 'Share Tech Mono', monospace;
+}
+
+/* Neon text utilities */
+.neon-yellow {
+  color: var(--cp-yellow);
+  text-shadow: var(--cp-glow-yellow);
+}
+
+.neon-cyan {
+  color: var(--cp-cyan);
+  text-shadow: var(--cp-glow-cyan);
+}
+
+.neon-magenta {
+  color: var(--cp-magenta);
+  text-shadow: var(--cp-glow-magenta);
+}
+
+/* Glitch animation */
+@keyframes glitch {
+  0% { transform: translate(0); }
+  20% { transform: translate(-2px, 2px); }
+  40% { transform: translate(-2px, -2px); }
+  60% { transform: translate(2px, 2px); }
+  80% { transform: translate(2px, -2px); }
+  100% { transform: translate(0); }
+}
+
+@keyframes flicker {
+  0%, 19%, 21%, 23%, 25%, 54%, 56%, 100% { opacity: 1; }
+  20%, 24%, 55% { opacity: 0.8; }
+}
+
+@keyframes scanline {
+  0% { transform: translateY(-100%); }
+  100% { transform: translateY(100vh); }
+}
+
+/* Cyberpunk button base */
+.cp-button {
+  font-family: 'Orbitron', sans-serif;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  padding: 0.7rem 1.5rem;
+  border: 1px solid var(--cp-yellow);
+  background: transparent;
+  color: var(--cp-yellow);
+  cursor: pointer;
+  position: relative;
+  clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 10px 100%, 0 calc(100% - 10px));
+  transition: all 0.2s ease;
+}
+
+.cp-button:hover {
+  background: var(--cp-yellow);
+  color: var(--cp-bg-dark);
+  box-shadow: var(--cp-glow-yellow);
+}
+
+.cp-button--magenta {
+  border-color: var(--cp-magenta);
+  color: var(--cp-magenta);
+}
+
+.cp-button--magenta:hover {
+  background: var(--cp-magenta);
+  color: white;
+  box-shadow: var(--cp-glow-magenta);
+}
+
+.cp-button--cyan {
+  border-color: var(--cp-cyan);
+  color: var(--cp-cyan);
+}
+
+.cp-button--cyan:hover {
+  background: var(--cp-cyan);
+  color: var(--cp-bg-dark);
+  box-shadow: var(--cp-glow-cyan);
+}
+
+/* Cyberpunk card */
+.cp-card {
+  background: var(--cp-bg-card);
+  border: 1px solid var(--cp-border);
+  border-left: 3px solid var(--cp-yellow);
+  padding: 1.25rem;
+  position: relative;
+  clip-path: polygon(0 0, calc(100% - 15px) 0, 100% 15px, 100% 100%, 15px 100%, 0 calc(100% - 15px));
+  transition: all 0.2s ease;
+}
+
+.cp-card:hover {
+  border-color: var(--cp-cyan);
+  border-left-color: var(--cp-cyan);
+  box-shadow: 0 0 15px #00F0FF22;
+}
+
+/* Cyberpunk input */
+.cp-input {
+  font-family: 'Share Tech Mono', monospace;
+  background: var(--cp-bg-dark);
+  border: 1px solid var(--cp-border);
+  border-bottom: 2px solid var(--cp-yellow);
+  color: var(--cp-text-primary);
+  padding: 0.6rem 0.8rem;
+  font-size: 0.9rem;
+  outline: none;
+  transition: all 0.2s ease;
+}
+
+.cp-input:focus {
+  border-bottom-color: var(--cp-cyan);
+  box-shadow: 0 2px 8px #00F0FF33;
+}
+
+.cp-input::placeholder {
+  color: var(--cp-text-secondary);
+}
+
+/* Badge styles */
+.cp-badge {
+  font-family: 'Orbitron', sans-serif;
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  padding: 0.25rem 0.6rem;
+  border: 1px solid;
+}
+
+.cp-badge--buy {
+  color: var(--cp-cyan);
+  border-color: var(--cp-cyan);
+  background: #00F0FF15;
+  text-shadow: var(--cp-glow-cyan);
+}
+
+.cp-badge--wait {
+  color: var(--cp-text-secondary);
+  border-color: var(--cp-border);
+  background: #ffffff08;
+}
+
+.cp-badge--rising {
+  color: var(--cp-magenta);
+  border-color: var(--cp-magenta);
+  background: #FF003C15;
+  text-shadow: var(--cp-glow-magenta);
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--cp-bg-dark);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--cp-border);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--cp-yellow);
+}
+
+/* Selection */
+::selection {
+  background: var(--cp-yellow);
+  color: var(--cp-bg-dark);
+}
+
+/* React DatePicker - Cyberpunk Theme Override */
+.cp-datepicker-wrapper {
+  width: 100%;
+}
+
+.cp-datepicker-wrapper .cp-input {
+  width: 100%;
+  font-family: 'Share Tech Mono', monospace;
+  background: var(--cp-bg-dark);
+  border: 1px solid var(--cp-border);
+  border-bottom: 2px solid var(--cp-yellow);
+  color: var(--cp-text-primary);
+  padding: 0.6rem 0.8rem;
+  font-size: 0.9rem;
+  outline: none;
+  cursor: pointer;
+}
+
+.cp-datepicker-wrapper .cp-input:focus {
+  border-bottom-color: var(--cp-cyan);
+  box-shadow: 0 2px 8px #00F0FF33;
+}
+
+.react-datepicker {
+  font-family: 'Rajdhani', sans-serif !important;
+  background-color: #12121a !important;
+  border: 1px solid #2a2a4a !important;
+  border-top: 2px solid var(--cp-yellow) !important;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6), 0 0 15px #FCEE0922 !important;
+}
+
+.react-datepicker__header {
+  background-color: #1a1a2e !important;
+  border-bottom: 1px solid #2a2a4a !important;
+}
+
+.react-datepicker__current-month {
+  font-family: 'Orbitron', sans-serif !important;
+  color: var(--cp-yellow) !important;
+  font-size: 0.8rem !important;
+  letter-spacing: 1px !important;
+  text-transform: uppercase !important;
+}
+
+.react-datepicker__day-name {
+  color: #00F0FF !important;
+  font-family: 'Share Tech Mono', monospace !important;
+  font-size: 0.7rem !important;
+}
+
+.react-datepicker__day {
+  color: #e0e0e0 !important;
+  border-radius: 0 !important;
+}
+
+.react-datepicker__day:hover {
+  background-color: #FCEE0933 !important;
+  color: var(--cp-yellow) !important;
+}
+
+.react-datepicker__day--selected,
+.react-datepicker__day--keyboard-selected {
+  background-color: var(--cp-yellow) !important;
+  color: #0a0a0f !important;
+  font-weight: 700 !important;
+}
+
+.react-datepicker__day--today {
+  border: 1px solid var(--cp-cyan) !important;
+  font-weight: 600 !important;
+}
+
+.react-datepicker__day--disabled {
+  color: #333355 !important;
+}
+
+.react-datepicker__navigation-icon::before {
+  border-color: var(--cp-yellow) !important;
+}
+
+.react-datepicker__navigation:hover *::before {
+  border-color: var(--cp-cyan) !important;
+}
+
+.react-datepicker__triangle {
+  display: none !important;
+}
+
+.react-datepicker__close-icon::after {
+  background-color: var(--cp-magenta) !important;
+  font-size: 14px !important;
+}
+
+.react-datepicker-popper {
+  z-index: 1100 !important;
+}
