@@ -16,3 +16,6 @@ node_modules/
 
 # Docker
 pgdata/
+
+# Keep db-snapshots tracked (for portability between machines)
+# Run .\scripts\db-export.ps1 before pushing to save your data
