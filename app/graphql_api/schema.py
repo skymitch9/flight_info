@@ -9,8 +9,8 @@ from sqlalchemy.orm import selectinload
 from strawberry.fastapi import GraphQLRouter
 
 from app.database import get_session
-from app.models import AnalysisResult, PriceSnapshot, TripRequest
-from app.trip_manager.service import TripInput, TripService, TripValidationError
+from app.models import AnalysisResult, PriceSnapshot, Route, TripRequest
+from app.trip_manager.service import TripInput, TripNotFoundError, TripService, TripValidationError
 
 
 # --- Strawberry Types ---
@@ -65,6 +65,19 @@ class PriceSnapshotType:
 
 
 @strawberry.type
+class RouteType:
+    """A unique origin-destination route that owns price collection."""
+
+    id: int
+    origin: str
+    destination: str
+    status: str
+    last_collected_at: Optional[datetime]
+    price_history: list[PriceSnapshotType]
+    active_contracts: list["TripRequestType"]
+
+
+@strawberry.type
 class TripRequestType:
     """A user-defined trip request with nested price history and analysis."""
 
@@ -78,6 +91,8 @@ class TripRequestType:
     latest_departure_time: Optional[str]
     latest_return_time: Optional[str]
     is_active: bool
+    status: str
+    fulfilled_at: Optional[datetime]
     created_at: datetime
     updated_at: datetime
     price_history: list[PriceSnapshotType]
@@ -140,11 +155,43 @@ def _map_trip_to_type(trip: TripRequest) -> TripRequestType:
         latest_departure_time=trip.latest_departure_time,
         latest_return_time=trip.latest_return_time,
         is_active=trip.is_active,
+        status=trip.status,
+        fulfilled_at=trip.fulfilled_at,
         created_at=trip.created_at,
         updated_at=trip.updated_at,
         price_history=price_history,
         latest_analysis=latest_analysis,
         top_flight_options=top_flight_options,
+    )
+
+
+def _map_route_to_type(route: Route) -> RouteType:
+    """Convert a SQLAlchemy Route model to the GraphQL RouteType."""
+    price_history = [
+        PriceSnapshotType(
+            airline_code=snap.airline_code,
+            fare_class=snap.fare_class,
+            price_cents=snap.price_cents,
+            flight_date=snap.flight_date,
+            collected_at=snap.collected_at,
+        )
+        for snap in route.price_snapshots
+    ]
+
+    active_contracts = [
+        _map_trip_to_type(trip)
+        for trip in route.trip_requests
+        if trip.status == "active"
+    ]
+
+    return RouteType(
+        id=route.id,
+        origin=route.origin,
+        destination=route.destination,
+        status=route.status,
+        last_collected_at=route.last_collected_at,
+        price_history=price_history,
+        active_contracts=active_contracts,
     )
 
 
@@ -250,6 +297,7 @@ class Query:
             result = await session.execute(
                 select(TripRequest)
                 .where(TripRequest.is_active == True)  # noqa: E712
+                .where(TripRequest.status == "active")
                 .options(
                     selectinload(TripRequest.price_snapshots),
                     selectinload(TripRequest.analysis_results),
@@ -276,6 +324,54 @@ class Query:
                 return None
             return _map_trip_to_type(trip)
         return None
+
+    @strawberry.field
+    async def fulfilled_trips(self) -> list[TripRequestType]:
+        """Fetch all fulfilled trip contracts with their historical data.
+
+        Returns fulfilled contracts with origin, destination, date ranges,
+        fulfillment date, and final recommendation.
+        """
+        async for session in get_session():
+            service = TripService(session)
+            trips = await service.list_fulfilled_trips()
+            return [_map_trip_to_type(trip) for trip in trips]
+        return []
+
+    @strawberry.field
+    async def route(self, route_id: int) -> Optional[RouteType]:
+        """Fetch a single route with full price history and active contracts."""
+        async for session in get_session():
+            result = await session.execute(
+                select(Route)
+                .where(Route.id == route_id)
+                .options(
+                    selectinload(Route.price_snapshots),
+                    selectinload(Route.trip_requests).selectinload(TripRequest.price_snapshots),
+                    selectinload(Route.trip_requests).selectinload(TripRequest.analysis_results),
+                )
+            )
+            route = result.scalar_one_or_none()
+            if route is None:
+                return None
+            return _map_route_to_type(route)
+        return None
+
+    @strawberry.field
+    async def routes(self) -> list[RouteType]:
+        """Fetch all tracked routes with status and price history."""
+        async for session in get_session():
+            result = await session.execute(
+                select(Route)
+                .options(
+                    selectinload(Route.price_snapshots),
+                    selectinload(Route.trip_requests).selectinload(TripRequest.price_snapshots),
+                    selectinload(Route.trip_requests).selectinload(TripRequest.analysis_results),
+                )
+            )
+            routes = result.scalars().all()
+            return [_map_route_to_type(route) for route in routes]
+        return []
 
 
 # --- Mutation resolvers ---
@@ -362,6 +458,35 @@ class Mutation:
                 return await service.delete_trip(trip_id)
             except TripValidationError as e:
                 raise ValueError(e.message) from e
+        raise RuntimeError("Failed to acquire database session")
+
+    @strawberry.mutation
+    async def fulfill_trip(self, trip_id: int) -> TripRequestType:
+        """Mark a trip contract as fulfilled (purchased).
+
+        Sets the contract status to "fulfilled" and records the fulfillment timestamp.
+        The contract moves to the history section and no longer appears in active contracts.
+        """
+        async for session in get_session():
+            service = TripService(session)
+            try:
+                trip = await service.fulfill_trip(trip_id)
+            except TripNotFoundError as e:
+                raise ValueError(str(e)) from e
+            except TripValidationError as e:
+                raise ValueError(e.message) from e
+
+            # Reload with relationships for the response
+            result = await session.execute(
+                select(TripRequest)
+                .where(TripRequest.id == trip.id)
+                .options(
+                    selectinload(TripRequest.price_snapshots),
+                    selectinload(TripRequest.analysis_results),
+                )
+            )
+            trip = result.scalar_one()
+            return _map_trip_to_type(trip)
         raise RuntimeError("Failed to acquire database session")
 
     @strawberry.mutation

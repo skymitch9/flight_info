@@ -10,6 +10,7 @@
   --cp-blue: #1B1BFF;
   --cp-purple: #9D00FF;
   --cp-orange: #FF6B00;
+  --cp-green: #39FF14;
   
   /* Backgrounds */
   --cp-bg-dark: #0a0a0f;
@@ -27,6 +28,7 @@
   --cp-glow-yellow: 0 0 10px #FCEE09, 0 0 20px #FCEE0944;
   --cp-glow-cyan: 0 0 10px #00F0FF, 0 0 20px #00F0FF44;
   --cp-glow-magenta: 0 0 10px #FF003C, 0 0 20px #FF003C44;
+  --cp-glow-green: 0 0 10px #39FF14, 0 0 20px #39FF1444;
 }
 
 * {
@@ -169,6 +171,17 @@ code, .mono {
   background: var(--cp-cyan);
   color: var(--cp-bg-dark);
   box-shadow: var(--cp-glow-cyan);
+}
+
+.cp-button--green {
+  border-color: var(--cp-green);
+  color: var(--cp-green);
+}
+
+.cp-button--green:hover {
+  background: var(--cp-green);
+  color: var(--cp-bg-dark);
+  box-shadow: var(--cp-glow-green);
 }
 
 /* Cyberpunk card */

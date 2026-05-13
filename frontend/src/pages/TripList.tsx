@@ -89,6 +89,9 @@ export default function TripList() {
           <p style={styles.subtitle}>// NIGHT CITY DEPARTURES</p>
         </div>
         <div style={styles.actions}>
+          <Link to="/history" className="cp-button" style={{ textDecoration: 'none' }}>
+            ◈ CONTRACT ARCHIVE
+          </Link>
           <button
             className="cp-button cp-button--cyan"
             onClick={handleScan}

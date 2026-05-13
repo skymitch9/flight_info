@@ -1,9 +1,25 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, Column, Date, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Column, Date, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 
 from app.database import Base
+
+
+class Route(Base):
+    __tablename__ = "routes"
+
+    id = Column(Integer, primary_key=True)
+    origin = Column(String(3), nullable=False)
+    destination = Column(String(3), nullable=False)
+    status = Column(String(10), nullable=False, default="active")  # "active" | "dormant"
+    last_collected_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (UniqueConstraint("origin", "destination", name="uq_route_origin_dest"),)
+
+    price_snapshots = relationship("PriceSnapshot", back_populates="route")
+    trip_requests = relationship("TripRequest", back_populates="route")
 
 
 class TripRequest(Base):
@@ -19,9 +35,13 @@ class TripRequest(Base):
     latest_departure_time = Column(String(5), nullable=True)  # "HH:MM" - latest time willing to depart
     latest_return_time = Column(String(5), nullable=True)  # "HH:MM" - latest time willing to return
     is_active = Column(Boolean, default=True)
+    route_id = Column(Integer, ForeignKey("routes.id"), nullable=True)  # nullable during migration, enforced after
+    status = Column(String(10), nullable=False, default="active")  # "active" | "fulfilled"
+    fulfilled_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+    route = relationship("Route", back_populates="trip_requests")
     price_snapshots = relationship("PriceSnapshot", back_populates="trip_request")
     analysis_results = relationship("AnalysisResult", back_populates="trip_request")
     notifications = relationship("Notification", back_populates="trip_request")
@@ -31,7 +51,8 @@ class PriceSnapshot(Base):
     __tablename__ = "price_snapshots"
 
     id = Column(Integer, primary_key=True)
-    trip_request_id = Column(Integer, ForeignKey("trip_requests.id"), nullable=False)
+    trip_request_id = Column(Integer, ForeignKey("trip_requests.id"), nullable=True)
+    route_id = Column(Integer, ForeignKey("routes.id"), nullable=True)  # nullable during migration
     airline_code = Column(String(3), nullable=False)
     flight_number = Column(String(10), nullable=False)
     departure_time = Column(String(25), nullable=False)
@@ -45,6 +66,7 @@ class PriceSnapshot(Base):
     collected_at = Column(DateTime, default=datetime.utcnow)
 
     trip_request = relationship("TripRequest", back_populates="price_snapshots")
+    route = relationship("Route", back_populates="price_snapshots")
 
 
 class AnalysisResult(Base):

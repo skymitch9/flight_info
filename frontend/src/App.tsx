@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import client from './graphql/client';
 import TripList from './pages/TripList';
 import TripDetail from './pages/TripDetail';
+import ContractHistory from './pages/ContractHistory';
 
 function App() {
   return (
@@ -11,6 +12,7 @@ function App() {
         <Routes>
           <Route path="/" element={<TripList />} />
           <Route path="/trips/:id" element={<TripDetail />} />
+          <Route path="/history" element={<ContractHistory />} />
         </Routes>
       </BrowserRouter>
     </ApolloProvider>

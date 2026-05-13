@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useQuery, useMutation } from '@apollo/client/react';
-import { GET_TRIP_DETAIL, DELETE_TRIP, GET_TRIPS, TRIGGER_COLLECTION } from '../graphql/queries';
+import { GET_TRIP_DETAIL, DELETE_TRIP, GET_TRIPS, TRIGGER_COLLECTION, FULFILL_TRIP, GET_FULFILLED_TRIPS } from '../graphql/queries';
 import PriceChart from '../components/PriceChart';
 import FlightOptions from '../components/FlightOptions';
 import TripForm from '../components/TripForm';
@@ -50,6 +50,7 @@ interface TripData {
     earliestReturn: string | null;
     latestReturn: string | null;
     isActive: boolean;
+    status: string;
     priceHistory: PriceHistoryEntry[];
     latestAnalysis: AnalysisResult | null;
     topFlightOptions: FlightOption[];
@@ -102,6 +103,12 @@ export default function TripDetail() {
     refetchQueries: [{ query: GET_TRIP_DETAIL, variables: { tripId } }],
   });
 
+  const [fulfillTrip, { loading: fulfilling }] = useMutation(FULFILL_TRIP, {
+    variables: { tripId },
+    refetchQueries: [{ query: GET_TRIPS }, { query: GET_FULFILLED_TRIPS }],
+    onCompleted: () => navigate('/history'),
+  });
+
   if (loading) {
     return (
       <div style={styles.container}>
@@ -124,6 +131,12 @@ export default function TripDetail() {
   function handleDelete() {
     if (window.confirm('Flatline this contract? This cannot be undone.')) {
       deleteTrip();
+    }
+  }
+
+  function handleFulfill() {
+    if (window.confirm('Mark this contract as fulfilled? It will move to your history.')) {
+      fulfillTrip();
     }
   }
 
@@ -155,6 +168,11 @@ export default function TripDetail() {
           <button className="cp-button" onClick={() => triggerCollection()} disabled={scanning}>
             {scanning ? '◌ SCANNING...' : '⟳ RUN SCAN'}
           </button>
+          {trip.status === 'active' && (
+            <button className="cp-button cp-button--green" onClick={handleFulfill} disabled={fulfilling}>
+              {fulfilling ? '◌ PROCESSING...' : '✓ FULFILLED'}
+            </button>
+          )}
           <button className="cp-button cp-button--cyan" onClick={() => setShowEditModal(true)}>
             EDIT
           </button>

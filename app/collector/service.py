@@ -1,4 +1,4 @@
-"""Data collection service that orchestrates price fetching across all active trips."""
+"""Data collection service that orchestrates price fetching across all active routes."""
 
 from __future__ import annotations
 
@@ -10,7 +10,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.collector.base import FlightDataSource, FlightPrice
-from app.models import PriceSnapshot, TripRequest
+from app.models import PriceSnapshot, Route, TripRequest
+from app.route_tracker.service import RouteTracker
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -19,10 +20,11 @@ logger = structlog.get_logger(__name__)
 
 
 class CollectionService:
-    """Orchestrates price collection across all active trip requests.
+    """Orchestrates price collection across all active routes.
 
-    Iterates each active trip, queries all registered flight data sources,
-    persists price snapshots, and triggers the analyzer for recommendations.
+    Iterates each active route, queries all registered flight data sources,
+    persists price snapshots at the route level, and triggers the analyzer
+    for each active contract on that route.
     """
 
     def __init__(
@@ -43,103 +45,83 @@ class CollectionService:
         self.analyzer = analyzer
 
     async def collect_all(self) -> None:
-        """Run collection for all active trip requests.
+        """Run collection for all active routes.
 
-        For each active trip:
+        For each active route:
         1. Collect prices from all configured sources
-        2. Store price snapshots in the database
-        3. Trigger the analyzer for recommendation generation
+        2. Store price snapshots linked to the route
+        3. Update route.last_collected_at
+        4. Trigger the analyzer for each active contract on that route
 
-        Source failures are handled gracefully — a failing source is logged
-        and skipped while collection continues with remaining sources.
+        Route failures are handled gracefully — a failing route is logged
+        and skipped while collection continues with remaining routes.
         """
         async with self.session_factory() as session:
-            trip_requests = await self._get_active_trips(session)
+            route_tracker = RouteTracker(session)
+            routes = await route_tracker.get_active_routes()
 
-        logger.info("collection_started", active_trips=len(trip_requests))
+        logger.info("collection_started", active_routes=len(routes))
 
-        for trip in trip_requests:
+        for route in routes:
             try:
-                prices = await self._collect_for_trip(trip)
-                await self._store_snapshots(trip.id, prices)
-                await self.analyzer.analyze(trip, prices)
+                prices = await self._collect_for_route(route)
+                await self._store_snapshots(route.id, prices)
+                await self._update_last_collected(route.id)
+                await self._trigger_analysis_for_route(route.id, prices)
                 logger.info(
-                    "trip_collection_complete",
-                    trip_id=trip.id,
-                    origin=trip.origin,
-                    destination=trip.destination,
+                    "route_collection_complete",
+                    route_id=route.id,
+                    origin=route.origin,
+                    destination=route.destination,
                     prices_collected=len(prices),
                 )
             except Exception as exc:
                 logger.error(
-                    "trip_collection_failed",
-                    trip_id=trip.id,
+                    "route_collection_failed",
+                    route_id=route.id,
+                    origin=route.origin,
+                    destination=route.destination,
                     error=str(exc),
                 )
 
-        logger.info("collection_finished", active_trips=len(trip_requests))
+        logger.info("collection_finished", active_routes=len(routes))
 
-    async def _get_active_trips(self, session: AsyncSession) -> list[TripRequest]:
-        """Fetch all active trip requests from the database."""
-        result = await session.execute(
-            select(TripRequest).where(TripRequest.is_active == True)  # noqa: E712
-        )
-        return list(result.scalars().all())
-
-    async def _collect_for_trip(self, trip: TripRequest) -> list[FlightPrice]:
-        """Collect prices from all sources for a trip's date range.
+    async def _collect_for_route(self, route: Route) -> list[FlightPrice]:
+        """Collect prices from all sources for a route.
 
         Iterates each configured source and aggregates results.
         Individual source failures are logged and skipped.
-        Filters results by time constraints if set on the trip.
         """
         all_prices: list[FlightPrice] = []
 
         for source in self.sources:
             try:
                 prices = await source.search_flights(
-                    origin=trip.origin,
-                    destination=trip.destination,
-                    departure_date=trip.earliest_departure,
+                    origin=route.origin,
+                    destination=route.destination,
+                    departure_date=datetime.utcnow().date(),
                 )
                 all_prices.extend(prices)
                 logger.debug(
                     "source_results",
                     source=source.__class__.__name__,
-                    trip_id=trip.id,
+                    route_id=route.id,
                     results=len(prices),
                 )
             except Exception as exc:
                 logger.warning(
                     "source_failed",
                     source=source.__class__.__name__,
-                    trip_id=trip.id,
+                    route_id=route.id,
                     error=str(exc),
                 )
-
-        # Filter by latest_departure_time (must arrive by this time)
-        if trip.latest_departure_time and all_prices:
-            cutoff = trip.latest_departure_time
-            filtered = [
-                p for p in all_prices
-                if not p.arrival_time or _extract_arrival_time(p.arrival_time) <= cutoff
-            ]
-            logger.debug(
-                "time_filter_applied",
-                trip_id=trip.id,
-                filter_type="departure",
-                cutoff=cutoff,
-                before=len(all_prices),
-                after=len(filtered),
-            )
-            all_prices = filtered
 
         return all_prices
 
     async def _store_snapshots(
-        self, trip_request_id: int, prices: list[FlightPrice]
+        self, route_id: int, prices: list[FlightPrice]
     ) -> None:
-        """Persist collected prices as PriceSnapshot records."""
+        """Persist collected prices as PriceSnapshot records linked to a route."""
         import json
 
         if not prices:
@@ -164,7 +146,8 @@ class CollectionService:
                     ])
 
                 snapshot = PriceSnapshot(
-                    trip_request_id=trip_request_id,
+                    route_id=route_id,
+                    trip_request_id=None,
                     airline_code=price.airline,
                     flight_number=price.flight_number,
                     departure_time=price.departure_time,
@@ -182,9 +165,53 @@ class CollectionService:
 
         logger.debug(
             "snapshots_stored",
-            trip_request_id=trip_request_id,
+            route_id=route_id,
             count=len(prices),
         )
+
+    async def _update_last_collected(self, route_id: int) -> None:
+        """Update the route's last_collected_at timestamp after successful collection."""
+        async with self.session_factory() as session:
+            result = await session.execute(
+                select(Route).where(Route.id == route_id)
+            )
+            route = result.scalar_one_or_none()
+            if route:
+                route.last_collected_at = datetime.utcnow()
+                await session.commit()
+
+    async def _trigger_analysis_for_route(
+        self, route_id: int, prices: list[FlightPrice]
+    ) -> None:
+        """Trigger analysis for each active contract on the given route.
+
+        This makes collected price data available to all contracts referencing
+        the route for analysis purposes.
+        """
+        async with self.session_factory() as session:
+            result = await session.execute(
+                select(TripRequest).where(
+                    TripRequest.route_id == route_id,
+                    TripRequest.status == "active",
+                )
+            )
+            active_contracts = list(result.scalars().all())
+
+        for contract in active_contracts:
+            try:
+                await self.analyzer.analyze(contract, prices)
+                logger.debug(
+                    "analysis_triggered",
+                    route_id=route_id,
+                    trip_id=contract.id,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "analysis_failed",
+                    route_id=route_id,
+                    trip_id=contract.id,
+                    error=str(exc),
+                )
 
 
 def _extract_arrival_time(time_str: str) -> str:

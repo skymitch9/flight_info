@@ -35,6 +35,7 @@ export const GET_TRIP_DETAIL = gql`
       latestDepartureTime
       latestReturnTime
       isActive
+      status
       priceHistory {
         airlineCode
         fareClass
@@ -103,5 +104,75 @@ export const DELETE_TRIP = gql`
 export const TRIGGER_COLLECTION = gql`
   mutation TriggerCollection {
     triggerCollection
+  }
+`;
+
+export const GET_FULFILLED_TRIPS = gql`
+  query GetFulfilledTrips {
+    fulfilledTrips {
+      id
+      origin
+      destination
+      earliestDeparture
+      latestDeparture
+      earliestReturn
+      latestReturn
+      status
+      fulfilledAt
+      latestAnalysis {
+        recommendation
+        explanation
+        analyzedAt
+      }
+    }
+  }
+`;
+
+export const GET_ROUTE = gql`
+  query GetRoute($routeId: Int!) {
+    route(routeId: $routeId) {
+      id
+      origin
+      destination
+      status
+      lastCollectedAt
+      priceHistory {
+        airlineCode
+        fareClass
+        priceCents
+        flightDate
+        collectedAt
+      }
+      activeContracts {
+        id
+        origin
+        destination
+        earliestDeparture
+        latestDeparture
+        status
+      }
+    }
+  }
+`;
+
+export const GET_ROUTES = gql`
+  query GetRoutes {
+    routes {
+      id
+      origin
+      destination
+      status
+      lastCollectedAt
+    }
+  }
+`;
+
+export const FULFILL_TRIP = gql`
+  mutation FulfillTrip($tripId: Int!) {
+    fulfillTrip(tripId: $tripId) {
+      id
+      status
+      fulfilledAt
+    }
   }
 `;

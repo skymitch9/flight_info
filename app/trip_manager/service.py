@@ -2,13 +2,15 @@
 
 import re
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.models import TripRequest
+from app.route_tracker.service import RouteTracker
 
 
 class TripValidationError(Exception):
@@ -52,8 +54,21 @@ class TripService:
         self.session = session
 
     async def create_trip(self, input: TripInput) -> TripRequest:
-        """Validate and create a new trip request."""
+        """Validate and create a new trip request.
+
+        Also links the trip to a Route via RouteTracker. If the route was
+        dormant, it is reactivated so collection resumes.
+        """
         self._validate(input)
+
+        # Get or create the route for this origin-destination pair
+        route_tracker = RouteTracker(self.session)
+        route = await route_tracker.get_or_create_route(input.origin, input.destination)
+
+        # If the route was dormant, reactivate it for collection
+        if route.status == "dormant":
+            await route_tracker.reactivate_route(route.id)
+
         trip = TripRequest(
             origin=input.origin,
             destination=input.destination,
@@ -64,6 +79,7 @@ class TripService:
             latest_departure_time=input.latest_departure_time,
             latest_return_time=input.latest_return_time,
             is_active=True,
+            route_id=route.id,
         )
         self.session.add(trip)
         await self.session.commit()
@@ -77,6 +93,21 @@ class TripService:
         )
         return list(result.scalars().all())
 
+    async def list_fulfilled_trips(self) -> list[TripRequest]:
+        """Return all fulfilled trip requests with their relationships loaded.
+
+        Eagerly loads price_snapshots and analysis_results for the history view.
+        """
+        result = await self.session.execute(
+            select(TripRequest)
+            .where(TripRequest.status == "fulfilled")
+            .options(
+                selectinload(TripRequest.price_snapshots),
+                selectinload(TripRequest.analysis_results),
+            )
+        )
+        return list(result.scalars().all())
+
     async def get_trip(self, trip_id: int) -> TripRequest:
         """Fetch a single trip by ID. Raises TripNotFoundError if not found."""
         result = await self.session.execute(
@@ -85,6 +116,24 @@ class TripService:
         trip = result.scalar_one_or_none()
         if not trip:
             raise TripNotFoundError(trip_id)
+        return trip
+
+    async def fulfill_trip(self, trip_id: int) -> TripRequest:
+        """Mark a trip as fulfilled (purchased).
+
+        Sets status to "fulfilled" and records the fulfillment timestamp.
+        Raises TripNotFoundError if the trip does not exist.
+        Raises TripValidationError if the trip is already fulfilled.
+        """
+        trip = await self.get_trip(trip_id)
+
+        if trip.status != "active":
+            raise TripValidationError("Contract already fulfilled")
+
+        trip.status = "fulfilled"
+        trip.fulfilled_at = datetime.utcnow()
+        await self.session.commit()
+        await self.session.refresh(trip)
         return trip
 
     async def update_trip(self, trip_id: int, input: TripInput) -> TripRequest:
