@@ -17,11 +17,38 @@ function formatPrice(cents: number): string {
 
 function formatTime(isoTime: string): string {
   try {
+    // Handle "YYYY-MM-DD HH:MM" format
+    if (isoTime.includes(' ') && isoTime.length >= 16) {
+      const timePart = isoTime.split(' ')[1];
+      const [h, m] = timePart.split(':');
+      const hour = parseInt(h, 10);
+      const ampm = hour >= 12 ? 'PM' : 'AM';
+      const hour12 = hour % 12 || 12;
+      return `${hour12}:${m} ${ampm}`;
+    }
     const date = new Date(isoTime);
     return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   } catch {
     return isoTime;
   }
+}
+
+const AIRLINE_NAMES: Record<string, string> = {
+  AA: 'American',
+  DL: 'Delta',
+  UA: 'United',
+  WN: 'Southwest',
+  F9: 'Frontier',
+  NK: 'Spirit',
+  B6: 'JetBlue',
+  AS: 'Alaska',
+  HA: 'Hawaiian',
+  SY: 'Sun Country',
+  G4: 'Allegiant',
+};
+
+function airlineName(code: string): string {
+  return AIRLINE_NAMES[code] || code;
 }
 
 function OptionsTable({ options, title, accentColor }: { options: FlightOption[]; title: string; accentColor: string }) {
@@ -43,7 +70,7 @@ function OptionsTable({ options, title, accentColor }: { options: FlightOption[]
         <tbody>
           {options.map((option, index) => (
             <tr key={index} style={styles.tr}>
-              <td style={styles.td}>{option.airline}</td>
+              <td style={styles.td}>{airlineName(option.airline)}</td>
               <td style={{ ...styles.td, fontFamily: "'Share Tech Mono', monospace" }}>{option.flightNumber}</td>
               <td style={styles.td}>{formatTime(option.departureTime)}</td>
               <td style={styles.td}>{formatTime(option.arrivalTime)}</td>

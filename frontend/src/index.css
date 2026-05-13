@@ -228,7 +228,14 @@ code, .mono {
   text-shadow: var(--cp-glow-cyan);
 }
 
-.cp-badge--wait {
+.cp-badge--wait-active {
+  color: var(--cp-yellow);
+  border-color: var(--cp-yellow);
+  background: #FCEE0915;
+  text-shadow: 0 0 6px #FCEE0944;
+}
+
+.cp-badge--pending {
   color: var(--cp-text-secondary);
   border-color: var(--cp-border);
   background: #ffffff08;

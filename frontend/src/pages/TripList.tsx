@@ -27,12 +27,12 @@ interface TripsData {
 }
 
 function getRecommendationBadge(recommendation: string | undefined) {
-  if (!recommendation) return { label: 'NO DATA', className: 'cp-badge cp-badge--wait' };
+  if (!recommendation) return { label: 'PENDING', className: 'cp-badge cp-badge--pending' };
   switch (recommendation) {
     case 'buy_now': return { label: 'BUY NOW', className: 'cp-badge cp-badge--buy' };
     case 'prices_rising': return { label: 'PRICES RISING', className: 'cp-badge cp-badge--rising' };
-    case 'wait': return { label: 'WAIT', className: 'cp-badge cp-badge--wait' };
-    default: return { label: recommendation.toUpperCase(), className: 'cp-badge cp-badge--wait' };
+    case 'wait': return { label: 'WAIT', className: 'cp-badge cp-badge--wait-active' };
+    default: return { label: recommendation.toUpperCase(), className: 'cp-badge cp-badge--wait-active' };
   }
 }
 
@@ -44,10 +44,23 @@ function formatDate(dateStr: string): string {
 
 export default function TripList() {
   const [showForm, setShowForm] = useState(false);
+  const [scanStatus, setScanStatus] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
   const { data, loading, error } = useQuery<TripsData>(GET_TRIPS);
-  const [triggerCollection, { loading: collecting }] = useMutation(TRIGGER_COLLECTION, {
+  const [triggerCollection] = useMutation(TRIGGER_COLLECTION, {
     refetchQueries: [{ query: GET_TRIPS }],
   });
+
+  const handleScan = async () => {
+    setScanStatus('running');
+    try {
+      await triggerCollection();
+      setScanStatus('done');
+      setTimeout(() => setScanStatus('idle'), 4000);
+    } catch {
+      setScanStatus('error');
+      setTimeout(() => setScanStatus('idle'), 5000);
+    }
+  };
 
   if (loading) {
     return (
@@ -78,16 +91,33 @@ export default function TripList() {
         <div style={styles.actions}>
           <button
             className="cp-button cp-button--cyan"
-            onClick={() => triggerCollection()}
-            disabled={collecting}
+            onClick={handleScan}
+            disabled={scanStatus === 'running'}
           >
-            {collecting ? '◌ SCANNING...' : '⟳ RUN SCAN'}
+            {scanStatus === 'running' ? '◌ SCANNING...' : '⟳ RUN SCAN'}
           </button>
           <button className="cp-button" onClick={() => setShowForm(true)}>
             + NEW TRIP
           </button>
         </div>
       </div>
+
+      {/* Scan status feedback */}
+      {scanStatus === 'running' && (
+        <div style={styles.scanBanner}>
+          <span style={styles.scanPulse}>●</span> SCANNING FLIGHT DATA... THIS MAY TAKE A FEW SECONDS
+        </div>
+      )}
+      {scanStatus === 'done' && (
+        <div style={{ ...styles.scanBanner, borderColor: '#00F0FF', color: '#00F0FF' }}>
+          ✓ SCAN COMPLETE — PRICES UPDATED
+        </div>
+      )}
+      {scanStatus === 'error' && (
+        <div style={{ ...styles.scanBanner, borderColor: '#FF003C', color: '#FF003C' }}>
+          ✗ SCAN FAILED — CHECK SYSTEM LOGS
+        </div>
+      )}
 
       {/* Divider */}
       <div style={styles.divider} />
@@ -309,5 +339,20 @@ const styles: Record<string, React.CSSProperties> = {
     color: '#FF003C',
     fontSize: '1rem',
     marginTop: '4rem',
+  },
+  scanBanner: {
+    fontFamily: "'Share Tech Mono', monospace",
+    fontSize: '0.8rem',
+    color: '#FCEE09',
+    border: '1px solid #FCEE09',
+    background: '#FCEE0910',
+    padding: '0.6rem 1rem',
+    marginBottom: '1.5rem',
+    letterSpacing: '1px',
+  },
+  scanPulse: {
+    display: 'inline-block',
+    animation: 'flicker 1s infinite',
+    marginRight: '0.5rem',
   },
 };

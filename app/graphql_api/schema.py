@@ -111,7 +111,7 @@ def _map_trip_to_type(trip: TripRequest) -> TripRequestType:
         )
 
     # Derive top flight options from the latest price snapshots
-    top_flight_options = _derive_top_flight_options(trip.price_snapshots)
+    top_flight_options = _derive_top_flight_options(trip.price_snapshots, trip.latest_departure_time)
 
     return TripRequestType(
         id=trip.id,
@@ -132,11 +132,11 @@ def _map_trip_to_type(trip: TripRequest) -> TripRequestType:
     )
 
 
-def _derive_top_flight_options(snapshots: list[PriceSnapshot]) -> list[FlightOptionType]:
+def _derive_top_flight_options(snapshots: list[PriceSnapshot], latest_arrival_time: str | None = None) -> list[FlightOptionType]:
     """Derive top flight options from the latest price snapshots.
 
     Takes the most recently collected snapshots and returns up to 10
-    cheapest options as flight options.
+    cheapest options as flight options, filtered by arrival time constraint.
     """
     if not snapshots:
         return []
@@ -144,10 +144,21 @@ def _derive_top_flight_options(snapshots: list[PriceSnapshot]) -> list[FlightOpt
     # Find the latest collection timestamp
     latest_collected_at = max(snap.collected_at for snap in snapshots)
 
+    # Use a 5-minute window to capture the entire batch
+    from datetime import timedelta
+    cutoff_time = latest_collected_at - timedelta(minutes=5)
+
     # Filter to only the most recent batch of snapshots
     latest_snapshots = [
-        snap for snap in snapshots if snap.collected_at == latest_collected_at
+        snap for snap in snapshots if snap.collected_at >= cutoff_time
     ]
+
+    # Filter by arrival time constraint if set
+    if latest_arrival_time:
+        latest_snapshots = [
+            snap for snap in latest_snapshots
+            if not snap.arrival_time or _extract_time(snap.arrival_time) <= latest_arrival_time
+        ]
 
     # Sort by price and take top 10
     sorted_snapshots = sorted(latest_snapshots, key=lambda s: s.price_cents)[:10]
@@ -163,6 +174,26 @@ def _derive_top_flight_options(snapshots: list[PriceSnapshot]) -> list[FlightOpt
         )
         for snap in sorted_snapshots
     ]
+
+
+def _extract_time(time_str: str) -> str:
+    """Extract HH:MM from various time formats (ISO datetime, 'YYYY-MM-DD HH:MM', HH:MM, etc.)."""
+    if not time_str:
+        return "23:59"
+    # If it looks like "2026-05-13T08:30" or "2026-05-13 08:30"
+    if "T" in time_str or (len(time_str) > 10 and " " in time_str):
+        try:
+            # Split on T or space
+            separator = "T" if "T" in time_str else " "
+            parts = time_str.split(separator)
+            time_part = parts[1][:5]  # "HH:MM"
+            return time_part
+        except (IndexError, ValueError):
+            pass
+    # If it's already HH:MM or HH:MM:SS
+    if ":" in time_str and len(time_str) >= 5:
+        return time_str[:5]
+    return "23:59"
 
 
 # --- Query resolvers ---
@@ -293,11 +324,10 @@ class Mutation:
 
     @strawberry.mutation
     async def trigger_collection(self) -> bool:
-        """Manually trigger a price collection cycle."""
-        import asyncio
+        """Manually trigger a price collection cycle. Awaits completion."""
         from app.main import _run_collection
 
-        asyncio.create_task(_run_collection())
+        await _run_collection()
         return True
 
 

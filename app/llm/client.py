@@ -18,7 +18,7 @@ class LLMClient:
     def __init__(
         self,
         api_key: str,
-        model: str = "claude-3-5-sonnet-20241022",
+        model: str = "claude-sonnet-4-6",
         base_url: str = "https://api.anthropic.com/v1",
     ):
         self.api_key = api_key

@@ -91,6 +91,7 @@ class CollectionService:
 
         Iterates each configured source and aggregates results.
         Individual source failures are logged and skipped.
+        Filters results by time constraints if set on the trip.
         """
         all_prices: list[FlightPrice] = []
 
@@ -116,7 +117,40 @@ class CollectionService:
                     error=str(exc),
                 )
 
+        # Filter by latest_departure_time (must arrive by this time)
+        if trip.latest_departure_time and all_prices:
+            cutoff = trip.latest_departure_time
+            filtered = [
+                p for p in all_prices
+                if not p.arrival_time or _extract_arrival_time(p.arrival_time) <= cutoff
+            ]
+            logger.debug(
+                "time_filter_applied",
+                trip_id=trip.id,
+                filter_type="departure",
+                cutoff=cutoff,
+                before=len(all_prices),
+                after=len(filtered),
+            )
+            all_prices = filtered
+
         return all_prices
+
+
+def _extract_arrival_time(time_str: str) -> str:
+    """Extract HH:MM from arrival time string."""
+    if not time_str:
+        return "23:59"
+    if "T" in time_str or (len(time_str) > 10 and " " in time_str):
+        try:
+            separator = "T" if "T" in time_str else " "
+            parts = time_str.split(separator)
+            return parts[1][:5]
+        except (IndexError, ValueError):
+            pass
+    if ":" in time_str and len(time_str) >= 5:
+        return time_str[:5]
+    return "23:59"
 
     async def _store_snapshots(
         self, trip_request_id: int, prices: list[FlightPrice]

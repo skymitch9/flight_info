@@ -238,7 +238,7 @@ export default function TripForm({ onClose, existingTrip }: TripFormProps) {
           {/* Time Constraints */}
           <div style={styles.row}>
             <div style={styles.field}>
-              <label style={styles.label}>LATEST DEPARTURE TIME <span style={styles.optional}>(OPT)</span></label>
+              <label style={styles.label}>ARRIVE BY (OUTBOUND) <span style={styles.optional}>(OPT)</span></label>
               <input
                 className="cp-input"
                 style={styles.input}
@@ -248,7 +248,7 @@ export default function TripForm({ onClose, existingTrip }: TripFormProps) {
               />
             </div>
             <div style={styles.field}>
-              <label style={styles.label}>LATEST RETURN TIME <span style={styles.optional}>(OPT)</span></label>
+              <label style={styles.label}>ARRIVE BY (RETURN) <span style={styles.optional}>(OPT)</span></label>
               <input
                 className="cp-input"
                 style={styles.input}
