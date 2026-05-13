@@ -89,7 +89,7 @@ This feature introduces a contract history/archive system and route-level tracki
 #### Acceptance Criteria
 
 1. WHEN the PHX→ATL contract is created, THE Route_Tracker SHALL record a departure date of September 3 with a morning departure constraint and a return date of September 10 with an afternoon arrival constraint (Arizona time).
-2. WHEN the PHX→KIX contract is created, THE Route_Tracker SHALL record flexible departure dates spanning September through November of the next year.
+2. WHEN the PHX→Japan contracts are created, THE Route_Tracker SHALL record flexible departure dates spanning September through November of the next year for each destination airport: KIX (Osaka Kansai), NRT (Tokyo Narita), and HND (Tokyo Haneda).
 3. WHEN either contract is created, THE Route_Tracker SHALL create or reuse the corresponding Route record for deduplication.
 
 ### Requirement 8: Data Migration for Existing Contracts

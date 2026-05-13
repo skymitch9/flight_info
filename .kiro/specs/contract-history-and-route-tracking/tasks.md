@@ -182,9 +182,11 @@ Introduce a Route entity that owns price collection, refactor the collection ser
     - Ensure Route record is created/reused via RouteTracker
     - _Requirements: 7.1, 7.3_
 
-  - [ ] 10.2 Add seed script or instructions to create PHX→KIX contract
-    - Flexible departure dates spanning September through November of next year
-    - Ensure Route record is created/reused via RouteTracker
+  - [ ] 10.2 Add seed script or instructions to create PHX→Japan contracts
+    - Create PHX→KIX (Osaka Kansai) contract: flexible dates September through November next year
+    - Create PHX→NRT (Tokyo Narita) contract: flexible dates September through November next year
+    - Create PHX→HND (Tokyo Haneda) contract: flexible dates September through November next year
+    - Ensure Route records are created/reused via RouteTracker for each destination
     - _Requirements: 7.2, 7.3_
 
 - [ ]* 10.3 Write property test: Route Price History Completeness
