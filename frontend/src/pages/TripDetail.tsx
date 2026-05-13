@@ -27,6 +27,17 @@ interface FlightOption {
   arrivalTime: string;
   fareClass: string;
   priceCents: number;
+  stops: number;
+  totalDurationMinutes: number;
+  segments: {
+    airline: string;
+    flightNumber: string;
+    origin: string;
+    destination: string;
+    departureTime: string;
+    arrivalTime: string;
+    durationMinutes: number;
+  }[];
 }
 
 interface TripData {

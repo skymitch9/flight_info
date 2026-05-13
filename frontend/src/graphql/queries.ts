@@ -54,6 +54,17 @@ export const GET_TRIP_DETAIL = gql`
         arrivalTime
         fareClass
         priceCents
+        stops
+        totalDurationMinutes
+        segments {
+          airline
+          flightNumber
+          origin
+          destination
+          departureTime
+          arrivalTime
+          durationMinutes
+        }
       }
     }
   }

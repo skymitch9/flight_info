@@ -136,6 +136,56 @@ class CollectionService:
 
         return all_prices
 
+    async def _store_snapshots(
+        self, trip_request_id: int, prices: list[FlightPrice]
+    ) -> None:
+        """Persist collected prices as PriceSnapshot records."""
+        import json
+
+        if not prices:
+            return
+
+        async with self.session_factory() as session:
+            for price in prices:
+                # Serialize segments to JSON if present
+                segments_json = None
+                if price.segments:
+                    segments_json = json.dumps([
+                        {
+                            "airline": s.airline,
+                            "flight_number": s.flight_number,
+                            "origin": s.origin,
+                            "destination": s.destination,
+                            "departure_time": s.departure_time,
+                            "arrival_time": s.arrival_time,
+                            "duration_minutes": s.duration_minutes,
+                        }
+                        for s in price.segments
+                    ])
+
+                snapshot = PriceSnapshot(
+                    trip_request_id=trip_request_id,
+                    airline_code=price.airline,
+                    flight_number=price.flight_number,
+                    departure_time=price.departure_time,
+                    arrival_time=price.arrival_time,
+                    fare_class=price.fare_class,
+                    price_cents=price.price_cents,
+                    flight_date=price.departure_date,
+                    stops=price.stops,
+                    total_duration_minutes=price.total_duration_minutes,
+                    segments_json=segments_json,
+                    collected_at=datetime.utcnow(),
+                )
+                session.add(snapshot)
+            await session.commit()
+
+        logger.debug(
+            "snapshots_stored",
+            trip_request_id=trip_request_id,
+            count=len(prices),
+        )
+
 
 def _extract_arrival_time(time_str: str) -> str:
     """Extract HH:MM from arrival time string."""
@@ -151,32 +201,3 @@ def _extract_arrival_time(time_str: str) -> str:
     if ":" in time_str and len(time_str) >= 5:
         return time_str[:5]
     return "23:59"
-
-    async def _store_snapshots(
-        self, trip_request_id: int, prices: list[FlightPrice]
-    ) -> None:
-        """Persist collected prices as PriceSnapshot records."""
-        if not prices:
-            return
-
-        async with self.session_factory() as session:
-            for price in prices:
-                snapshot = PriceSnapshot(
-                    trip_request_id=trip_request_id,
-                    airline_code=price.airline,
-                    flight_number=price.flight_number,
-                    departure_time=price.departure_time,
-                    arrival_time=price.arrival_time,
-                    fare_class=price.fare_class,
-                    price_cents=price.price_cents,
-                    flight_date=price.departure_date,
-                    collected_at=datetime.utcnow(),
-                )
-                session.add(snapshot)
-            await session.commit()
-
-        logger.debug(
-            "snapshots_stored",
-            trip_request_id=trip_request_id,
-            count=len(prices),
-        )

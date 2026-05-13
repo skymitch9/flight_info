@@ -112,6 +112,8 @@ class SerpAPIFlightSource(FlightDataSource):
         departure_date: date,
     ) -> list[FlightPrice]:
         """Parse SerpAPI Google Flights response into FlightPrice objects."""
+        from app.collector.base import FlightSegment
+
         results: list[FlightPrice] = []
 
         # Google Flights returns "best_flights" and "other_flights"
@@ -128,19 +130,15 @@ class SerpAPIFlightSource(FlightDataSource):
                 price_cents = int(float(price) * 100)
 
                 # Each flight group has "flights" (segments)
-                segments = flight_group.get("flights", [])
-                if not segments:
+                segments_data = flight_group.get("flights", [])
+                if not segments_data:
                     continue
 
-                first_segment = segments[0]
-                last_segment = segments[-1]
+                first_segment = segments_data[0]
+                last_segment = segments_data[-1]
 
                 # Extract airline info
                 airline_code = first_segment.get("airline", "")
-                # SerpAPI sometimes gives full name, sometimes code
-                # Try to get the airline logo URL which contains the code
-                airline_logo = first_segment.get("airline_logo", "")
-
                 flight_number = first_segment.get("flight_number", "")
                 if not flight_number and "flight_number" in first_segment:
                     flight_number = str(first_segment["flight_number"])
@@ -152,7 +150,7 @@ class SerpAPIFlightSource(FlightDataSource):
                 departure_time = departure_info.get("time", "")
                 arrival_time = arrival_info.get("time", "")
 
-                # Determine fare class from type/class info
+                # Determine fare class
                 fare_class = self._determine_fare_class(flight_group)
 
                 # Build a reasonable flight number
@@ -161,11 +159,29 @@ class SerpAPIFlightSource(FlightDataSource):
 
                 # Use 2-letter airline code if we got a full name
                 if len(airline_code) > 2:
-                    # Try to extract from flight number
                     if flight_number and len(flight_number) >= 2:
                         airline_code = flight_number[:2]
                     else:
                         airline_code = airline_code[:2].upper()
+
+                # Stops and duration
+                stops = len(segments_data) - 1
+                total_duration = flight_group.get("total_duration", 0)
+
+                # Build segment details
+                segments: list[FlightSegment] = []
+                for seg in segments_data:
+                    seg_dep = seg.get("departure_airport", {})
+                    seg_arr = seg.get("arrival_airport", {})
+                    segments.append(FlightSegment(
+                        airline=seg.get("airline", airline_code),
+                        flight_number=seg.get("flight_number", ""),
+                        origin=seg_dep.get("id", seg_dep.get("name", "")),
+                        destination=seg_arr.get("id", seg_arr.get("name", "")),
+                        departure_time=seg_dep.get("time", ""),
+                        arrival_time=seg_arr.get("time", ""),
+                        duration_minutes=seg.get("duration", 0),
+                    ))
 
                 results.append(
                     FlightPrice(
@@ -178,6 +194,9 @@ class SerpAPIFlightSource(FlightDataSource):
                         origin=origin,
                         destination=destination,
                         departure_date=departure_date,
+                        stops=stops,
+                        total_duration_minutes=total_duration,
+                        segments=segments,
                     )
                 )
             except (KeyError, ValueError, TypeError) as exc:

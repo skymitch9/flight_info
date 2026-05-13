@@ -39,6 +39,9 @@ class PriceSnapshot(Base):
     fare_class = Column(String(20), nullable=False)
     price_cents = Column(Integer, nullable=False)
     flight_date = Column(Date, nullable=False)
+    stops = Column(Integer, default=0)
+    total_duration_minutes = Column(Integer, default=0)
+    segments_json = Column(Text, nullable=True)  # JSON array of segment details
     collected_at = Column(DateTime, default=datetime.utcnow)
 
     trip_request = relationship("TripRequest", back_populates="price_snapshots")

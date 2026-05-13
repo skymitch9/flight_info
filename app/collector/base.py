@@ -4,6 +4,19 @@ from datetime import date
 
 
 @dataclass
+class FlightSegment:
+    """A single leg/segment of a flight."""
+
+    airline: str
+    flight_number: str
+    origin: str
+    destination: str
+    departure_time: str
+    arrival_time: str
+    duration_minutes: int
+
+
+@dataclass
 class FlightPrice:
     """Represents a single flight price result from a data source."""
 
@@ -16,6 +29,9 @@ class FlightPrice:
     origin: str
     destination: str
     departure_date: date
+    stops: int = 0
+    total_duration_minutes: int = 0
+    segments: list[FlightSegment] | None = None
 
 
 class FlightDataSource(ABC):

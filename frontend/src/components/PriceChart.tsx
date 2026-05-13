@@ -15,36 +15,76 @@ interface PriceChartProps {
 }
 
 interface ChartDataPoint {
+  timestamp: number;
   collectedAt: string;
   mainCabin: number | null;
   premium: number | null;
 }
 
-function formatDate(isoString: string): string {
-  const date = new Date(isoString);
-  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+type TimeScale = 'minutes' | 'hours' | 'days' | 'months';
+
+function getTimeScale(dataPoints: ChartDataPoint[]): TimeScale {
+  if (dataPoints.length < 2) return 'minutes';
+  const first = dataPoints[0].timestamp;
+  const last = dataPoints[dataPoints.length - 1].timestamp;
+  const rangeMs = last - first;
+  const rangeHours = rangeMs / (1000 * 60 * 60);
+
+  if (rangeHours < 2) return 'minutes';
+  if (rangeHours < 48) return 'hours';
+  if (rangeHours < 24 * 60) return 'days';
+  return 'months';
+}
+
+function formatTick(timestamp: number, scale: TimeScale): string {
+  const date = new Date(timestamp);
+  switch (scale) {
+    case 'minutes':
+      return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    case 'hours':
+      return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    case 'days':
+      return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+    case 'months':
+      return date.toLocaleDateString([], { month: 'short', year: '2-digit' });
+  }
+}
+
+function formatTooltipLabel(timestamp: number, scale: TimeScale): string {
+  const date = new Date(timestamp);
+  switch (scale) {
+    case 'minutes':
+    case 'hours':
+      return date.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+    case 'days':
+      return date.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
+    case 'months':
+      return date.toLocaleDateString([], { month: 'long', year: 'numeric' });
+  }
 }
 
 function transformData(priceHistory: PriceHistoryEntry[]): ChartDataPoint[] {
-  const grouped = new Map<string, { mainCabin: number[]; premium: number[] }>();
+  // Group by collectedAt timestamp (within 1 minute window)
+  const grouped = new Map<number, { mainCabin: number[]; premium: number[]; raw: string }>();
 
   for (const entry of priceHistory) {
-    const key = entry.collectedAt;
-    if (!grouped.has(key)) grouped.set(key, { mainCabin: [], premium: [] });
-    const group = grouped.get(key)!;
+    const ts = new Date(entry.collectedAt).getTime();
+    // Round to nearest minute to group batch entries
+    const roundedTs = Math.round(ts / 60000) * 60000;
+
+    if (!grouped.has(roundedTs)) grouped.set(roundedTs, { mainCabin: [], premium: [], raw: entry.collectedAt });
+    const group = grouped.get(roundedTs)!;
     const priceDollars = entry.priceCents / 100;
     if (entry.fareClass === 'main_cabin') group.mainCabin.push(priceDollars);
     else group.premium.push(priceDollars);
   }
 
-  const sortedKeys = Array.from(grouped.keys()).sort(
-    (a, b) => new Date(a).getTime() - new Date(b).getTime()
-  );
+  const sortedKeys = Array.from(grouped.keys()).sort((a, b) => a - b);
 
   return sortedKeys.map((key) => {
     const group = grouped.get(key)!;
     const avg = (arr: number[]) => arr.length > 0 ? Math.round((arr.reduce((s, p) => s + p, 0) / arr.length) * 100) / 100 : null;
-    return { collectedAt: key, mainCabin: avg(group.mainCabin), premium: avg(group.premium) };
+    return { timestamp: key, collectedAt: group.raw, mainCabin: avg(group.mainCabin), premium: avg(group.premium) };
   });
 }
 
@@ -58,14 +98,17 @@ export default function PriceChart({ priceHistory }: PriceChartProps) {
   }
 
   const data = transformData(priceHistory);
+  const scale = getTimeScale(data);
 
   return (
     <ResponsiveContainer width="100%" height={300}>
       <LineChart data={data} margin={{ top: 10, right: 30, left: 10, bottom: 10 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="#2a2a4a" />
         <XAxis
-          dataKey="collectedAt"
-          tickFormatter={formatDate}
+          dataKey="timestamp"
+          type="number"
+          domain={['dataMin', 'dataMax']}
+          tickFormatter={(ts) => formatTick(ts, scale)}
           stroke="#555577"
           tick={{ fontSize: 11, fontFamily: 'Share Tech Mono' }}
         />
@@ -75,7 +118,7 @@ export default function PriceChart({ priceHistory }: PriceChartProps) {
           tick={{ fontSize: 11, fontFamily: 'Share Tech Mono' }}
         />
         <Tooltip
-          labelFormatter={(label) => formatDate(String(label))}
+          labelFormatter={(ts) => formatTooltipLabel(Number(ts), scale)}
           formatter={(value) => [`$${Number(value).toFixed(2)}`, '']}
           contentStyle={{
             background: '#12121a',
@@ -94,7 +137,7 @@ export default function PriceChart({ priceHistory }: PriceChartProps) {
           name="MAIN CABIN"
           stroke="#00F0FF"
           strokeWidth={2}
-          dot={false}
+          dot={data.length < 20}
           connectNulls
         />
         <Line
@@ -103,7 +146,7 @@ export default function PriceChart({ priceHistory }: PriceChartProps) {
           name="PREMIUM"
           stroke="#FCEE09"
           strokeWidth={2}
-          dot={false}
+          dot={data.length < 20}
           connectNulls
         />
       </LineChart>

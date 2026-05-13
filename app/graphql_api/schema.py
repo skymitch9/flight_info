@@ -17,6 +17,19 @@ from app.trip_manager.service import TripInput, TripService, TripValidationError
 
 
 @strawberry.type
+class FlightSegmentType:
+    """A single leg/segment of a flight."""
+
+    airline: str
+    flight_number: str
+    origin: str
+    destination: str
+    departure_time: str
+    arrival_time: str
+    duration_minutes: int
+
+
+@strawberry.type
 class FlightOptionType:
     """A specific flight option derived from the latest price snapshots."""
 
@@ -26,6 +39,9 @@ class FlightOptionType:
     arrival_time: str
     fare_class: str
     price_cents: int
+    stops: int
+    total_duration_minutes: int
+    segments: list[FlightSegmentType]
 
 
 @strawberry.type
@@ -171,9 +187,35 @@ def _derive_top_flight_options(snapshots: list[PriceSnapshot], latest_arrival_ti
             arrival_time=snap.arrival_time,
             fare_class=snap.fare_class,
             price_cents=snap.price_cents,
+            stops=snap.stops or 0,
+            total_duration_minutes=snap.total_duration_minutes or 0,
+            segments=_parse_segments_json(snap.segments_json),
         )
         for snap in sorted_snapshots
     ]
+
+
+def _parse_segments_json(segments_json: str | None) -> list[FlightSegmentType]:
+    """Parse stored segments JSON into GraphQL types."""
+    if not segments_json:
+        return []
+    import json
+    try:
+        data = json.loads(segments_json)
+        return [
+            FlightSegmentType(
+                airline=s.get("airline", ""),
+                flight_number=s.get("flight_number", ""),
+                origin=s.get("origin", ""),
+                destination=s.get("destination", ""),
+                departure_time=s.get("departure_time", ""),
+                arrival_time=s.get("arrival_time", ""),
+                duration_minutes=s.get("duration_minutes", 0),
+            )
+            for s in data
+        ]
+    except (json.JSONDecodeError, TypeError):
+        return []
 
 
 def _extract_time(time_str: str) -> str:
