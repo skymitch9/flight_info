@@ -278,3 +278,69 @@ app = FastAPI(title="Flight Deal Tracker", lifespan=lifespan)
 
 # Mount GraphQL endpoint at /graphql
 app.include_router(graphql_router, prefix="/graphql")
+
+
+# --- Health Check Endpoints ---
+
+
+@app.get("/health")
+async def health_check():
+    """Basic health check — confirms the app is running."""
+    return {"status": "ok", "service": "flight-deal-tracker"}
+
+
+@app.get("/health/db")
+async def health_check_db():
+    """Database health check — confirms DB connectivity."""
+    from app.database import async_session_factory
+    from sqlalchemy import text
+
+    try:
+        async with async_session_factory() as session:
+            await session.execute(text("SELECT 1"))
+        return {"status": "ok", "database": "connected"}
+    except Exception as exc:
+        return {"status": "error", "database": str(exc)}
+
+
+@app.get("/health/full")
+async def health_check_full():
+    """Full system health check — DB, scheduler, and config."""
+    from app.database import async_session_factory
+    from sqlalchemy import text, select
+    from app.models import TripRequest
+
+    checks = {}
+
+    # DB connectivity
+    try:
+        async with async_session_factory() as session:
+            await session.execute(text("SELECT 1"))
+        checks["database"] = "ok"
+    except Exception as exc:
+        checks["database"] = f"error: {exc}"
+
+    # Scheduler running
+    checks["scheduler"] = "running" if scheduler.running else "stopped"
+
+    # Active trips count
+    try:
+        async with async_session_factory() as session:
+            result = await session.execute(
+                select(TripRequest).where(TripRequest.is_active == True)  # noqa: E712
+            )
+            trips = result.scalars().all()
+            checks["active_trips"] = len(trips)
+    except Exception:
+        checks["active_trips"] = "error"
+
+    # Config loaded
+    try:
+        settings = Settings()
+        checks["serpapi"] = "configured" if settings.serpapi_key else "not configured"
+        checks["llm"] = "configured" if settings.llm_api_key else "not configured"
+    except Exception:
+        checks["config"] = "error"
+
+    overall = "ok" if checks.get("database") == "ok" and checks.get("scheduler") == "running" else "degraded"
+    return {"status": overall, "checks": checks}
