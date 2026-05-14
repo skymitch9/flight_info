@@ -11,6 +11,7 @@ from strawberry.fastapi import GraphQLRouter
 
 from app.database import get_session
 from app.models import AnalysisResult, PriceSnapshot, Route, TripRequest
+from app.pricing.calculator import LuggageConfig, calculate_total_price
 from app.trip_manager.service import TripInput, TripNotFoundError, TripService, TripValidationError
 
 
@@ -40,6 +41,7 @@ class FlightOptionType:
     arrival_time: str
     fare_class: str
     price_cents: int
+    total_price_cents: int
     flight_date: date
     stops: int
     total_duration_minutes: int
@@ -53,6 +55,7 @@ class RoundTripOptionType:
     outbound: FlightOptionType
     return_flight: FlightOptionType
     combined_price_cents: int
+    total_combined_price_cents: int
 
 
 @strawberry.type
@@ -101,6 +104,9 @@ class TripRequestType:
     latest_return: Optional[date]
     latest_departure_time: Optional[str]
     latest_return_time: Optional[str]
+    passenger_count: int
+    carry_on_bags: int
+    checked_bags: int
     is_active: bool
     status: str
     fulfilled_at: Optional[datetime]
@@ -124,6 +130,9 @@ class TripRequestInput:
     latest_return: Optional[date] = None
     latest_departure_time: Optional[str] = None
     latest_return_time: Optional[str] = None
+    passenger_count: Optional[int] = 1
+    carry_on_bags: Optional[int] = 1
+    checked_bags: Optional[int] = 0
 
 
 # --- Helper functions ---
@@ -132,7 +141,16 @@ class TripRequestInput:
 def _map_trip_to_type(trip: TripRequest, return_snapshots: list[PriceSnapshot] | None = None) -> TripRequestType:
     """Convert a SQLAlchemy TripRequest model to the GraphQL TripRequestType."""
     # Use route snapshots (all fare classes) if available, fall back to trip snapshots
-    all_snapshots = trip.route.price_snapshots if trip.route and trip.route.price_snapshots else trip.price_snapshots
+    # Check if route relationship is already loaded to avoid lazy-load in async context
+    from sqlalchemy import inspect as sa_inspect
+    trip_state = sa_inspect(trip)
+    route_loaded = 'route' not in trip_state.unloaded
+    if route_loaded and trip.route is not None:
+        route_state = sa_inspect(trip.route)
+        snaps_loaded = 'price_snapshots' not in route_state.unloaded
+        all_snapshots = trip.route.price_snapshots if snaps_loaded and trip.route.price_snapshots else trip.price_snapshots
+    else:
+        all_snapshots = trip.price_snapshots
 
     # Map price history
     price_history = [
@@ -156,12 +174,19 @@ def _map_trip_to_type(trip: TripRequest, return_snapshots: list[PriceSnapshot] |
             analyzed_at=latest.analyzed_at,
         )
 
+    # Build luggage config from trip for price calculations
+    luggage = LuggageConfig(
+        carry_on_bags=trip.carry_on_bags,
+        checked_bags=trip.checked_bags,
+    )
+    passenger_count = trip.passenger_count
+
     # Derive top flight options from the route's price snapshots (all fare classes)
-    top_flight_options = _derive_top_flight_options(all_snapshots, trip.latest_departure_time)
+    top_flight_options = _derive_top_flight_options(all_snapshots, trip.latest_departure_time, luggage, passenger_count)
 
     # Derive round-trip options when trip has return dates
     if trip.earliest_return is not None:
-        round_trip_options = _derive_round_trip_options(all_snapshots, return_snapshots or [], trip)
+        round_trip_options = _derive_round_trip_options(all_snapshots, return_snapshots or [], trip, luggage, passenger_count)
     else:
         round_trip_options = []
 
@@ -175,6 +200,9 @@ def _map_trip_to_type(trip: TripRequest, return_snapshots: list[PriceSnapshot] |
         latest_return=trip.latest_return,
         latest_departure_time=trip.latest_departure_time,
         latest_return_time=trip.latest_return_time,
+        passenger_count=trip.passenger_count,
+        carry_on_bags=trip.carry_on_bags,
+        checked_bags=trip.checked_bags,
         is_active=trip.is_active,
         status=trip.status,
         fulfilled_at=trip.fulfilled_at,
@@ -243,11 +271,17 @@ def _get_latest_batch(snapshots: list[PriceSnapshot]) -> list[PriceSnapshot]:
     return result
 
 
-def _derive_top_flight_options(snapshots: list[PriceSnapshot], latest_arrival_time: str | None = None) -> list[FlightOptionType]:
+def _derive_top_flight_options(
+    snapshots: list[PriceSnapshot],
+    latest_arrival_time: str | None = None,
+    luggage: LuggageConfig | None = None,
+    passenger_count: int = 1,
+) -> list[FlightOptionType]:
     """Derive top flight options from the latest price snapshots.
 
     Takes the most recently collected snapshots and returns up to 10
     cheapest options as flight options, filtered by arrival time constraint.
+    Computes total_price_cents using the PriceCalculator when luggage config is provided.
     """
     if not snapshots:
         return []
@@ -272,6 +306,10 @@ def _derive_top_flight_options(snapshots: list[PriceSnapshot], latest_arrival_ti
     for fare_class, group in fare_grouped.items():
         sorted_snapshots.extend(sorted(group, key=lambda s: s.price_cents)[:10])
 
+    # Default luggage config if not provided
+    if luggage is None:
+        luggage = LuggageConfig(carry_on_bags=1, checked_bags=0)
+
     return [
         FlightOptionType(
             airline=snap.airline_code,
@@ -280,6 +318,12 @@ def _derive_top_flight_options(snapshots: list[PriceSnapshot], latest_arrival_ti
             arrival_time=snap.arrival_time,
             fare_class=snap.fare_class,
             price_cents=snap.price_cents,
+            total_price_cents=calculate_total_price(
+                base_fare_cents=snap.price_cents,
+                airline_code=snap.airline_code,
+                luggage=luggage,
+                passenger_count=passenger_count,
+            ).total_price_cents,
             flight_date=snap.flight_date,
             stops=snap.stops or 0,
             total_duration_minutes=snap.total_duration_minutes or 0,
@@ -293,15 +337,22 @@ def _derive_round_trip_options(
     outbound_snapshots: list[PriceSnapshot],
     return_snapshots: list[PriceSnapshot],
     trip: TripRequest,
+    luggage: LuggageConfig | None = None,
+    passenger_count: int = 1,
 ) -> list[RoundTripOptionType]:
     """Derive round-trip flight options by pairing outbound and return flights.
 
     Filters both sets of snapshots to the latest batch, applies date/time
     constraints from the trip, forms the cartesian product, filters invalid
     pairs, sorts by combined price, and returns the top 10.
+    Computes total_price_cents and total_combined_price_cents using PriceCalculator.
     """
     if not outbound_snapshots or not return_snapshots:
         return []
+
+    # Default luggage config if not provided
+    if luggage is None:
+        luggage = LuggageConfig(carry_on_bags=1, checked_bags=0)
 
     # Filter to latest batch for each direction
     outbound_batch = _get_latest_batch(outbound_snapshots)
@@ -341,36 +392,55 @@ def _derive_round_trip_options(
     top_pairs = pairs[:10]
 
     # Map to RoundTripOptionType objects
-    return [
-        RoundTripOptionType(
-            outbound=FlightOptionType(
-                airline=out.airline_code,
-                flight_number=out.flight_number,
-                departure_time=out.departure_time,
-                arrival_time=out.arrival_time,
-                fare_class=out.fare_class,
-                price_cents=out.price_cents,
-                flight_date=out.flight_date,
-                stops=out.stops or 0,
-                total_duration_minutes=out.total_duration_minutes or 0,
-                segments=_parse_segments_json(out.segments_json),
-            ),
-            return_flight=FlightOptionType(
-                airline=ret.airline_code,
-                flight_number=ret.flight_number,
-                departure_time=ret.departure_time,
-                arrival_time=ret.arrival_time,
-                fare_class=ret.fare_class,
-                price_cents=ret.price_cents,
-                flight_date=ret.flight_date,
-                stops=ret.stops or 0,
-                total_duration_minutes=ret.total_duration_minutes or 0,
-                segments=_parse_segments_json(ret.segments_json),
-            ),
-            combined_price_cents=out.price_cents + ret.price_cents,
+    result = []
+    for out, ret in top_pairs:
+        out_total = calculate_total_price(
+            base_fare_cents=out.price_cents,
+            airline_code=out.airline_code,
+            luggage=luggage,
+            passenger_count=passenger_count,
+        ).total_price_cents
+        ret_total = calculate_total_price(
+            base_fare_cents=ret.price_cents,
+            airline_code=ret.airline_code,
+            luggage=luggage,
+            passenger_count=passenger_count,
+        ).total_price_cents
+
+        result.append(
+            RoundTripOptionType(
+                outbound=FlightOptionType(
+                    airline=out.airline_code,
+                    flight_number=out.flight_number,
+                    departure_time=out.departure_time,
+                    arrival_time=out.arrival_time,
+                    fare_class=out.fare_class,
+                    price_cents=out.price_cents,
+                    total_price_cents=out_total,
+                    flight_date=out.flight_date,
+                    stops=out.stops or 0,
+                    total_duration_minutes=out.total_duration_minutes or 0,
+                    segments=_parse_segments_json(out.segments_json),
+                ),
+                return_flight=FlightOptionType(
+                    airline=ret.airline_code,
+                    flight_number=ret.flight_number,
+                    departure_time=ret.departure_time,
+                    arrival_time=ret.arrival_time,
+                    fare_class=ret.fare_class,
+                    price_cents=ret.price_cents,
+                    total_price_cents=ret_total,
+                    flight_date=ret.flight_date,
+                    stops=ret.stops or 0,
+                    total_duration_minutes=ret.total_duration_minutes or 0,
+                    segments=_parse_segments_json(ret.segments_json),
+                ),
+                combined_price_cents=out.price_cents + ret.price_cents,
+                total_combined_price_cents=out_total + ret_total,
+            )
         )
-        for out, ret in top_pairs
-    ]
+
+    return result
 
 
 def _parse_segments_json(segments_json: str | None) -> list[FlightSegmentType]:
@@ -576,6 +646,9 @@ class Mutation:
                         latest_return=input.latest_return,
                         latest_departure_time=input.latest_departure_time,
                         latest_return_time=input.latest_return_time,
+                        passenger_count=input.passenger_count if input.passenger_count is not None else 1,
+                        carry_on_bags=input.carry_on_bags if input.carry_on_bags is not None else 1,
+                        checked_bags=input.checked_bags if input.checked_bags is not None else 0,
                     )
                 )
             except TripValidationError as e:
@@ -612,6 +685,9 @@ class Mutation:
                         latest_return=input.latest_return,
                         latest_departure_time=input.latest_departure_time,
                         latest_return_time=input.latest_return_time,
+                        passenger_count=input.passenger_count if input.passenger_count is not None else 1,
+                        carry_on_bags=input.carry_on_bags if input.carry_on_bags is not None else 1,
+                        checked_bags=input.checked_bags if input.checked_bags is not None else 0,
                     ),
                 )
             except TripValidationError as e:

@@ -27,6 +27,7 @@ interface FlightOption {
   arrivalTime: string;
   fareClass: string;
   priceCents: number;
+  totalPriceCents: number;
   flightDate: string;
   stops: number;
   totalDurationMinutes: number;
@@ -45,6 +46,7 @@ interface RoundTripOption {
   outbound: FlightOption;
   returnFlight: FlightOption;
   combinedPriceCents: number;
+  totalCombinedPriceCents: number;
 }
 
 interface TripData {
@@ -58,6 +60,9 @@ interface TripData {
     latestReturn: string | null;
     isActive: boolean;
     status: string;
+    passengerCount: number;
+    carryOnBags: number;
+    checkedBags: number;
     priceHistory: PriceHistoryEntry[];
     latestAnalysis: AnalysisResult | null;
     topFlightOptions: FlightOption[];
@@ -237,6 +242,9 @@ export default function TripDetail() {
             latestDeparture: trip.latestDeparture,
             earliestReturn: trip.earliestReturn,
             latestReturn: trip.latestReturn,
+            passengerCount: trip.passengerCount,
+            carryOnBags: trip.carryOnBags,
+            checkedBags: trip.checkedBags,
           }}
         />
       )}

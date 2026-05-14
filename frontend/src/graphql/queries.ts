@@ -13,6 +13,9 @@ export const GET_TRIPS = gql`
       latestDepartureTime
       latestReturnTime
       isActive
+      passengerCount
+      carryOnBags
+      checkedBags
       latestAnalysis {
         recommendation
         explanation
@@ -35,6 +38,9 @@ export const GET_TRIP_DETAIL = gql`
       latestDepartureTime
       latestReturnTime
       isActive
+      passengerCount
+      carryOnBags
+      checkedBags
       status
       priceHistory {
         airlineCode
@@ -55,6 +61,7 @@ export const GET_TRIP_DETAIL = gql`
         arrivalTime
         fareClass
         priceCents
+        totalPriceCents
         flightDate
         stops
         totalDurationMinutes
@@ -76,6 +83,7 @@ export const GET_TRIP_DETAIL = gql`
           arrivalTime
           fareClass
           priceCents
+          totalPriceCents
           flightDate
           stops
           totalDurationMinutes
@@ -96,6 +104,7 @@ export const GET_TRIP_DETAIL = gql`
           arrivalTime
           fareClass
           priceCents
+          totalPriceCents
           flightDate
           stops
           totalDurationMinutes
@@ -110,6 +119,7 @@ export const GET_TRIP_DETAIL = gql`
           }
         }
         combinedPriceCents
+        totalCombinedPriceCents
       }
     }
   }

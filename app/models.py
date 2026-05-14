@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, Column, Date, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, Column, Date, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 
 from app.database import Base
@@ -34,12 +34,21 @@ class TripRequest(Base):
     latest_return = Column(Date, nullable=True)
     latest_departure_time = Column(String(5), nullable=True)  # "HH:MM" - latest time willing to depart
     latest_return_time = Column(String(5), nullable=True)  # "HH:MM" - latest time willing to return
+    passenger_count = Column(Integer, nullable=False, default=1)
+    carry_on_bags = Column(Integer, nullable=False, default=1)
+    checked_bags = Column(Integer, nullable=False, default=0)
     is_active = Column(Boolean, default=True)
     route_id = Column(Integer, ForeignKey("routes.id"), nullable=True)  # nullable during migration, enforced after
     status = Column(String(10), nullable=False, default="active")  # "active" | "fulfilled"
     fulfilled_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        CheckConstraint("passenger_count BETWEEN 1 AND 9", name="chk_passenger_count_range"),
+        CheckConstraint("carry_on_bags BETWEEN 0 AND 2", name="chk_carry_on_bags_range"),
+        CheckConstraint("checked_bags BETWEEN 0 AND 5", name="chk_checked_bags_range"),
+    )
 
     route = relationship("Route", back_populates="trip_requests")
     price_snapshots = relationship("PriceSnapshot", back_populates="trip_request")

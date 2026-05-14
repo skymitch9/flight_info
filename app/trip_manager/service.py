@@ -42,6 +42,9 @@ class TripInput:
     latest_return: Optional[date] = None
     latest_departure_time: Optional[str] = None  # "HH:MM"
     latest_return_time: Optional[str] = None  # "HH:MM"
+    passenger_count: int = 1
+    carry_on_bags: int = 1
+    checked_bags: int = 0
 
 
 _IATA_CODE_PATTERN = re.compile(r"^[A-Z]{3}$")
@@ -78,6 +81,9 @@ class TripService:
             latest_return=input.latest_return,
             latest_departure_time=input.latest_departure_time,
             latest_return_time=input.latest_return_time,
+            passenger_count=input.passenger_count,
+            carry_on_bags=input.carry_on_bags,
+            checked_bags=input.checked_bags,
             is_active=True,
             route_id=route.id,
         )
@@ -148,6 +154,9 @@ class TripService:
         trip.latest_return = input.latest_return
         trip.latest_departure_time = input.latest_departure_time
         trip.latest_return_time = input.latest_return_time
+        trip.passenger_count = input.passenger_count
+        trip.carry_on_bags = input.carry_on_bags
+        trip.checked_bags = input.checked_bags
         await self.session.commit()
         await self.session.refresh(trip)
         return trip
@@ -232,3 +241,24 @@ class TripService:
                     "Latest return date must be on or after earliest return date",
                     field="latest_return",
                 )
+
+        # Passenger count validation
+        if not (1 <= input.passenger_count <= 9):
+            raise TripValidationError(
+                "Passenger count must be between 1 and 9",
+                field="passenger_count",
+            )
+
+        # Carry-on bags validation
+        if not (0 <= input.carry_on_bags <= 2):
+            raise TripValidationError(
+                "Carry-on bags must be between 0 and 2",
+                field="carry_on_bags",
+            )
+
+        # Checked bags validation
+        if not (0 <= input.checked_bags <= 5):
+            raise TripValidationError(
+                "Checked bags must be between 0 and 5",
+                field="checked_bags",
+            )

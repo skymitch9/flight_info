@@ -17,6 +17,7 @@ interface FlightOption {
   arrivalTime: string;
   fareClass: string;
   priceCents: number;
+  totalPriceCents: number;
   flightDate: string;
   stops: number;
   totalDurationMinutes: number;
@@ -27,6 +28,7 @@ interface RoundTripOption {
   outbound: FlightOption;
   returnFlight: FlightOption;
   combinedPriceCents: number;
+  totalCombinedPriceCents: number;
 }
 
 interface FlightOptionsProps {
@@ -229,8 +231,14 @@ function FlightRow({ option }: { option: FlightOption }) {
           </span>
         </td>
         <td style={styles.td}>{formatDuration(option.totalDurationMinutes)}</td>
-        <td style={{ ...styles.td, textAlign: 'right', color: '#00F0FF', fontWeight: 700 }}>
-          {formatPrice(option.priceCents)}
+        <td style={{ ...styles.td, textAlign: 'right' }}>
+          <span style={{ color: '#8888aa', fontSize: '0.8rem' }}>{formatPrice(option.priceCents)}</span>
+          {option.totalPriceCents !== option.priceCents && (
+            <span style={{ color: '#00F0FF', fontWeight: 700, marginLeft: '0.5rem' }}>{formatPrice(option.totalPriceCents)}</span>
+          )}
+          {option.totalPriceCents === option.priceCents && (
+            <span style={{ color: '#00F0FF', fontWeight: 700, marginLeft: '0.5rem' }}>{formatPrice(option.priceCents)}</span>
+          )}
         </td>
         <td style={{ ...styles.td, color: '#555577', cursor: 'pointer' }}>
           {option.segments.length > 0 ? (expanded ? '▾' : '▸') : ''}
@@ -249,10 +257,81 @@ function FlightRow({ option }: { option: FlightOption }) {
 
 export default function FlightOptions({ options, roundTripOptions }: FlightOptionsProps) {
   const [activeTab, setActiveTab] = useState(ALL_TAB);
+  const [selectedAirlines, setSelectedAirlines] = useState<Set<string>>(new Set());
+  const [minPrice, setMinPrice] = useState<string>('');
+  const [maxPrice, setMaxPrice] = useState<string>('');
+  const [maxStops, setMaxStops] = useState<number>(-1); // -1 = any
+  // Get unique airlines from all options
+  const availableAirlines = useMemo(() => {
+    const airlines = new Set<string>();
+    for (const o of options) {
+      if (o.airline) airlines.add(o.airline);
+    }
+    return Array.from(airlines).sort();
+  }, [options]);
+
+  // Initialize selected airlines to all when options change
+  useMemo(() => {
+    if (selectedAirlines.size === 0 && availableAirlines.length > 0) {
+      setSelectedAirlines(new Set(availableAirlines));
+    }
+  }, [availableAirlines]);
+
   const fareClasses = useMemo(() => getUniqueFareClasses(options), [options]);
   const counts = useMemo(() => countByFareClass(options, fareClasses), [options, fareClasses]);
-  const filteredOptions = useMemo(() => filterByFareClass(options, activeTab), [options, activeTab]);
-  const filteredRoundTrips = useMemo(() => filterRoundTripsByFareClass(roundTripOptions || [], activeTab), [roundTripOptions, activeTab]);
+
+  // Apply fare class filter, then airline + price filters
+  const filteredOptions = useMemo(() => {
+    let result = filterByFareClass(options, activeTab);
+    // Airline filter
+    if (selectedAirlines.size > 0 && selectedAirlines.size < availableAirlines.length) {
+      result = result.filter(o => selectedAirlines.has(o.airline));
+    }
+    // Price filter (using totalPriceCents, input is in dollars)
+    const min = minPrice ? parseInt(minPrice) * 100 : 0;
+    const max = maxPrice ? parseInt(maxPrice) * 100 : Infinity;
+    if (min > 0 || max < Infinity) {
+      result = result.filter(o => o.totalPriceCents >= min && o.totalPriceCents <= max);
+    }
+    // Stops filter
+    if (maxStops >= 0) {
+      result = result.filter(o => o.stops <= maxStops);
+    }
+    return result;
+  }, [options, activeTab, selectedAirlines, availableAirlines.length, minPrice, maxPrice, maxStops]);
+
+  const filteredRoundTrips = useMemo(() => {
+    let result = filterRoundTripsByFareClass(roundTripOptions || [], activeTab);
+    if (selectedAirlines.size > 0 && selectedAirlines.size < availableAirlines.length) {
+      result = result.filter(rt => selectedAirlines.has(rt.outbound.airline) && selectedAirlines.has(rt.returnFlight.airline));
+    }
+    const min = minPrice ? parseInt(minPrice) * 100 : 0;
+    const max = maxPrice ? parseInt(maxPrice) * 100 : Infinity;
+    if (min > 0 || max < Infinity) {
+      result = result.filter(rt => rt.totalCombinedPriceCents >= min && rt.totalCombinedPriceCents <= max);
+    }
+    if (maxStops >= 0) {
+      result = result.filter(rt => rt.outbound.stops <= maxStops && rt.returnFlight.stops <= maxStops);
+    }
+    return result;
+  }, [roundTripOptions, activeTab, selectedAirlines, availableAirlines.length, minPrice, maxPrice, maxStops]);
+
+  function toggleAirline(code: string) {
+    setSelectedAirlines(prev => {
+      const next = new Set(prev);
+      if (next.has(code)) next.delete(code);
+      else next.add(code);
+      return next;
+    });
+  }
+
+  function selectAllAirlines() {
+    setSelectedAirlines(new Set(availableAirlines));
+  }
+
+  function clearAllAirlines() {
+    setSelectedAirlines(new Set());
+  }
 
   if (!options || options.length === 0) {
     return (
@@ -265,6 +344,66 @@ export default function FlightOptions({ options, roundTripOptions }: FlightOptio
   return (
     <div style={{ overflowX: 'auto' }}>
       <FareClassTabs activeTab={activeTab} onTabChange={setActiveTab} counts={counts} fareClasses={fareClasses} />
+
+      {/* Filters */}
+      <div style={styles.filterBar}>
+        <div style={styles.filterSection}>
+          <span style={styles.filterLabel}>AIRLINES</span>
+          <span style={styles.filterLink} onClick={selectAllAirlines}>All</span>
+          <span style={styles.filterLink} onClick={clearAllAirlines}>None</span>
+          {availableAirlines.map(code => (
+            <label key={code} style={styles.checkboxLabel}>
+              <input
+                type="checkbox"
+                checked={selectedAirlines.has(code)}
+                onChange={() => toggleAirline(code)}
+                style={styles.checkbox}
+              />
+              {airlineName(code)}
+            </label>
+          ))}
+        </div>
+        <div style={styles.filterSection}>
+          <span style={styles.filterLabel}>PRICE</span>
+          <input
+            className="cp-input"
+            style={styles.priceInput}
+            type="number"
+            placeholder="Min $"
+            value={minPrice}
+            onChange={e => setMinPrice(e.target.value)}
+          />
+          <span style={{ color: '#555577', margin: '0 0.3rem' }}>–</span>
+          <input
+            className="cp-input"
+            style={styles.priceInput}
+            type="number"
+            placeholder="Max $"
+            value={maxPrice}
+            onChange={e => setMaxPrice(e.target.value)}
+          />
+        </div>
+        <div style={styles.filterSection}>
+          <span style={styles.filterLabel}>STOPS</span>
+          {[
+            { label: 'Any', value: -1 },
+            { label: 'Nonstop', value: 0 },
+            { label: '≤1', value: 1 },
+            { label: '≤2', value: 2 },
+          ].map(opt => (
+            <label key={opt.value} style={styles.checkboxLabel}>
+              <input
+                type="radio"
+                name="stops"
+                checked={maxStops === opt.value}
+                onChange={() => setMaxStops(opt.value)}
+                style={styles.checkbox}
+              />
+              {opt.label}
+            </label>
+          ))}
+        </div>
+      </div>
       {filteredOptions.length === 0 ? (
         <p style={styles.noData}>No {activeTab} flights available.</p>
       ) : (
@@ -283,7 +422,7 @@ export default function FlightOptions({ options, roundTripOptions }: FlightOptio
             </tr>
           </thead>
           <tbody>
-            {filteredOptions.map((option, index) => (
+            {[...filteredOptions].sort((a, b) => a.totalPriceCents - b.totalPriceCents).map((option, index) => (
               <FlightRow key={index} option={option} />
             ))}
           </tbody>
@@ -307,29 +446,37 @@ export default function FlightOptions({ options, roundTripOptions }: FlightOptio
                 </tr>
               </thead>
               <tbody>
-                {filteredRoundTrips.map((rt, index) => (
-                  <tr key={index} style={styles.tr}>
-                    <td style={styles.td}>
-                      <span style={styles.dateBadge}>{formatFlightDate(rt.outbound.flightDate)}</span>
-                    </td>
-                    <td style={styles.td}>
-                      <span style={styles.rtFlight}>
-                        {airlineName(rt.outbound.airline)} {rt.outbound.flightNumber}
-                      </span>
-                    </td>
-                    <td style={styles.td}>
-                      <span style={styles.dateBadge}>{formatFlightDate(rt.returnFlight.flightDate)}</span>
-                    </td>
-                    <td style={styles.td}>
-                      <span style={styles.rtFlight}>
-                        {airlineName(rt.returnFlight.airline)} {rt.returnFlight.flightNumber}
-                      </span>
-                    </td>
-                    <td style={{ ...styles.td, textAlign: 'right', color: '#00F0FF', fontWeight: 700 }}>
-                      {formatPrice(rt.combinedPriceCents)}
-                    </td>
-                  </tr>
-                ))}
+                {filteredRoundTrips.map((rt, index) => {
+                  return (
+                    <tr key={index} style={styles.tr}>
+                      <td style={styles.td}>
+                        <span style={styles.dateBadge}>{formatFlightDate(rt.outbound.flightDate)}</span>
+                      </td>
+                      <td style={styles.td}>
+                        <span style={styles.rtFlight}>
+                          {airlineName(rt.outbound.airline)} {rt.outbound.flightNumber}
+                        </span>
+                      </td>
+                      <td style={styles.td}>
+                        <span style={styles.dateBadge}>{formatFlightDate(rt.returnFlight.flightDate)}</span>
+                      </td>
+                      <td style={styles.td}>
+                        <span style={styles.rtFlight}>
+                          {airlineName(rt.returnFlight.airline)} {rt.returnFlight.flightNumber}
+                        </span>
+                      </td>
+                      <td style={{ ...styles.td, textAlign: 'right' }}>
+                        <span style={{ color: '#8888aa', fontSize: '0.8rem' }}>{formatPrice(rt.combinedPriceCents)}</span>
+                        {rt.totalCombinedPriceCents !== rt.combinedPriceCents && (
+                          <span style={{ color: '#00F0FF', fontWeight: 700, marginLeft: '0.5rem' }}>{formatPrice(rt.totalCombinedPriceCents)}</span>
+                        )}
+                        {rt.totalCombinedPriceCents === rt.combinedPriceCents && (
+                          <span style={{ color: '#00F0FF', fontWeight: 700, marginLeft: '0.5rem' }}>{formatPrice(rt.combinedPriceCents)}</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           )}
@@ -482,5 +629,51 @@ const styles: Record<string, React.CSSProperties> = {
   tabBadge: {
     fontFamily: "'Share Tech Mono', monospace",
     fontSize: '0.65rem',
+  },
+  filterBar: {
+    display: 'flex',
+    flexWrap: 'wrap' as const,
+    gap: '1.5rem',
+    alignItems: 'center',
+    padding: '0.6rem 0',
+    marginBottom: '0.75rem',
+    borderBottom: '1px solid #1a1a2e',
+  },
+  filterSection: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '0.5rem',
+    flexWrap: 'wrap' as const,
+  },
+  filterLabel: {
+    fontFamily: "'Share Tech Mono', monospace",
+    fontSize: '0.65rem',
+    color: '#00F0FF',
+    letterSpacing: '1px',
+    marginRight: '0.25rem',
+  },
+  filterLink: {
+    fontFamily: "'Share Tech Mono', monospace",
+    fontSize: '0.6rem',
+    color: '#FCEE09',
+    cursor: 'pointer',
+    textDecoration: 'underline',
+  },
+  checkboxLabel: {
+    fontFamily: "'Rajdhani', sans-serif",
+    fontSize: '0.8rem',
+    color: '#e0e0e0',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '0.2rem',
+    cursor: 'pointer',
+  },
+  checkbox: {
+    accentColor: '#00F0FF',
+  },
+  priceInput: {
+    width: '70px',
+    padding: '0.3rem 0.4rem',
+    fontSize: '0.75rem',
   },
 };

@@ -2,7 +2,7 @@ import { useState, useEffect, type FormEvent } from 'react';
 import { useMutation } from '@apollo/client/react';
 import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
-import { CREATE_TRIP, UPDATE_TRIP, GET_TRIPS } from '../graphql/queries';
+import { CREATE_TRIP, UPDATE_TRIP, GET_TRIPS, GET_TRIP_DETAIL } from '../graphql/queries';
 
 interface TripData {
   id: number;
@@ -14,6 +14,9 @@ interface TripData {
   latestReturn?: string | null;
   latestDepartureTime?: string | null;
   latestReturnTime?: string | null;
+  passengerCount?: number | null;
+  carryOnBags?: number | null;
+  checkedBags?: number | null;
 }
 
 interface TripFormProps {
@@ -28,6 +31,9 @@ interface FormErrors {
   latestDeparture?: string;
   earliestReturn?: string;
   latestReturn?: string;
+  passengerCount?: string;
+  carryOnBags?: string;
+  checkedBags?: string;
 }
 
 function parseDate(dateStr: string | null | undefined): Date | null {
@@ -55,6 +61,9 @@ export default function TripForm({ onClose, existingTrip }: TripFormProps) {
   const [latestReturn, setLatestReturn] = useState<Date | null>(parseDate(existingTrip?.latestReturn));
   const [latestDepartureTime, setLatestDepartureTime] = useState(existingTrip?.latestDepartureTime ?? '');
   const [latestReturnTime, setLatestReturnTime] = useState(existingTrip?.latestReturnTime ?? '');
+  const [passengerCount, setPassengerCount] = useState<number>(existingTrip?.passengerCount ?? 1);
+  const [carryOnBags, setCarryOnBags] = useState<number>(existingTrip?.carryOnBags ?? 1);
+  const [checkedBags, setCheckedBags] = useState<number>(existingTrip?.checkedBags ?? 0);
   const [errors, setErrors] = useState<FormErrors>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
 
@@ -65,7 +74,7 @@ export default function TripForm({ onClose, existingTrip }: TripFormProps) {
   });
 
   const [updateTrip, { loading: updating }] = useMutation(UPDATE_TRIP, {
-    refetchQueries: [{ query: GET_TRIPS }],
+    refetchQueries: [{ query: GET_TRIPS }, ...(existingTrip ? [{ query: GET_TRIP_DETAIL, variables: { tripId: existingTrip.id } }] : [])],
     onCompleted: () => onClose(),
     onError: (err) => setSubmitError(err.message),
   });
@@ -95,6 +104,11 @@ export default function TripForm({ onClose, existingTrip }: TripFormProps) {
 
     if (earliestReturn && earliestDeparture && earliestReturn < earliestDeparture) newErrors.earliestReturn = 'BEFORE DEPARTURE';
     if (latestReturn && earliestReturn && latestReturn < earliestReturn) newErrors.latestReturn = 'INVALID RANGE';
+
+    if (passengerCount < 1 || passengerCount > 9) newErrors.passengerCount = 'MUST BE 1-9';
+    if (carryOnBags < 0 || carryOnBags > 2) newErrors.carryOnBags = 'MUST BE 0-2';
+    if (checkedBags < 0 || checkedBags > 5) newErrors.checkedBags = 'MUST BE 0-5';
+
     return newErrors;
   }
 
@@ -114,6 +128,9 @@ export default function TripForm({ onClose, existingTrip }: TripFormProps) {
       latestReturn: formatDateForApi(latestReturn),
       latestDepartureTime: latestDepartureTime || null,
       latestReturnTime: latestReturnTime || null,
+      passengerCount,
+      carryOnBags,
+      checkedBags,
     };
 
     if (isEditMode && existingTrip) {
@@ -256,6 +273,49 @@ export default function TripForm({ onClose, existingTrip }: TripFormProps) {
                 value={latestReturnTime}
                 onChange={(e) => setLatestReturnTime(e.target.value)}
               />
+            </div>
+          </div>
+
+          {/* Passengers & Luggage */}
+          <div style={styles.row}>
+            <div style={styles.field}>
+              <label style={styles.label}>PASSENGERS</label>
+              <input
+                className="cp-input"
+                style={styles.input}
+                type="number"
+                min={1}
+                max={9}
+                value={passengerCount}
+                onChange={(e) => setPassengerCount(parseInt(e.target.value) || 0)}
+              />
+              {errors.passengerCount && <span style={styles.error}>{errors.passengerCount}</span>}
+            </div>
+            <div style={styles.field}>
+              <label style={styles.label}>CARRY-ON BAGS</label>
+              <input
+                className="cp-input"
+                style={styles.input}
+                type="number"
+                min={0}
+                max={2}
+                value={carryOnBags}
+                onChange={(e) => setCarryOnBags(parseInt(e.target.value) || 0)}
+              />
+              {errors.carryOnBags && <span style={styles.error}>{errors.carryOnBags}</span>}
+            </div>
+            <div style={styles.field}>
+              <label style={styles.label}>CHECKED BAGS</label>
+              <input
+                className="cp-input"
+                style={styles.input}
+                type="number"
+                min={0}
+                max={5}
+                value={checkedBags}
+                onChange={(e) => setCheckedBags(parseInt(e.target.value) || 0)}
+              />
+              {errors.checkedBags && <span style={styles.error}>{errors.checkedBags}</span>}
             </div>
           </div>
 
