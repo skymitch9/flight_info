@@ -28,8 +28,9 @@ class SerpAPIFlightSource(FlightDataSource):
     Free tier: 250 searches/month (plenty for a personal tracker).
     """
 
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: str, travel_classes: list[int] | None = None):
         self.api_key = api_key
+        self._travel_classes = travel_classes or [1]
 
     async def search_flights(
         self,
@@ -37,72 +38,86 @@ class SerpAPIFlightSource(FlightDataSource):
         destination: str,
         departure_date: date,
         airline_filter: list[str] | None = None,
+        travel_classes: list[int] | None = None,
     ) -> list[FlightPrice]:
-        """Search Google Flights for a given route and date.
+        """Search Google Flights for a given route and date across specified fare classes.
 
         Args:
             origin: 3-letter IATA airport code (e.g., "ATL").
             destination: 3-letter IATA airport code (e.g., "LAX").
             departure_date: Date to search for flights.
             airline_filter: Optional list of airline codes to restrict results.
+            travel_classes: List of travel class codes to query.
+                1=Economy, 2=Premium Economy, 3=Business, 4=First.
+                Defaults to [1] (economy only).
 
         Returns:
-            List of FlightPrice results from Google Flights.
+            List of FlightPrice results from Google Flights across specified travel classes.
         """
+        if travel_classes is None:
+            travel_classes = self._travel_classes
+
+        all_results: list[FlightPrice] = []
+
         async with httpx.AsyncClient() as client:
-            try:
-                params = {
-                    "engine": "google_flights",
-                    "departure_id": origin,
-                    "arrival_id": destination,
-                    "outbound_date": departure_date.isoformat(),
-                    "currency": "USD",
-                    "hl": "en",
-                    "type": "2",  # One-way (simpler for price tracking)
-                    "api_key": self.api_key,
-                }
+            for travel_class in travel_classes:
+                try:
+                    params = {
+                        "engine": "google_flights",
+                        "departure_id": origin,
+                        "arrival_id": destination,
+                        "outbound_date": departure_date.isoformat(),
+                        "currency": "USD",
+                        "hl": "en",
+                        "type": "2",  # One-way
+                        "travel_class": str(travel_class),
+                        "api_key": self.api_key,
+                    }
 
-                # Add airline filter if specified
-                if airline_filter:
-                    params["include_airlines"] = ",".join(airline_filter)
+                    # Add airline filter if specified
+                    if airline_filter:
+                        params["include_airlines"] = ",".join(airline_filter)
 
-                response = await client.get(
-                    SERPAPI_URL,
-                    params=params,
-                    timeout=30.0,
-                )
-                response.raise_for_status()
-                data = response.json()
-
-                # Check for API errors
-                if "error" in data:
-                    logger.warning(
-                        "SerpAPI error for %s→%s: %s",
-                        origin, destination, data["error"],
+                    response = await client.get(
+                        SERPAPI_URL,
+                        params=params,
+                        timeout=30.0,
                     )
-                    return []
+                    response.raise_for_status()
+                    data = response.json()
 
-                return self._parse_results(data, origin, destination, departure_date)
+                    # Check for API errors
+                    if "error" in data:
+                        logger.warning(
+                            "SerpAPI error for %s→%s (class %d): %s",
+                            origin, destination, travel_class, data["error"],
+                        )
+                        continue
 
-            except httpx.TimeoutException:
-                logger.warning(
-                    "SerpAPI timeout for %s→%s on %s",
-                    origin, destination, departure_date,
-                )
-                return []
-            except httpx.HTTPStatusError as exc:
-                logger.warning(
-                    "SerpAPI HTTP error %d for %s→%s: %s",
-                    exc.response.status_code, origin, destination,
-                    exc.response.text[:200],
-                )
-                return []
-            except Exception as exc:
-                logger.warning(
-                    "SerpAPI source failed for %s→%s: %s",
-                    origin, destination, str(exc),
-                )
-                return []
+                    results = self._parse_results(data, origin, destination, departure_date, travel_class)
+                    all_results.extend(results)
+
+                except httpx.TimeoutException:
+                    logger.warning(
+                        "SerpAPI timeout for %s→%s (class %d) on %s",
+                        origin, destination, travel_class, departure_date,
+                    )
+                    continue
+                except httpx.HTTPStatusError as exc:
+                    logger.warning(
+                        "SerpAPI HTTP error %d for %s→%s (class %d): %s",
+                        exc.response.status_code, origin, destination, travel_class,
+                        exc.response.text[:200],
+                    )
+                    continue
+                except Exception as exc:
+                    logger.warning(
+                        "SerpAPI source failed for %s→%s (class %d): %s",
+                        origin, destination, travel_class, str(exc),
+                    )
+                    continue
+
+        return all_results
 
     def _parse_results(
         self,
@@ -110,11 +125,21 @@ class SerpAPIFlightSource(FlightDataSource):
         origin: str,
         destination: str,
         departure_date: date,
+        travel_class: int = 1,
     ) -> list[FlightPrice]:
         """Parse SerpAPI Google Flights response into FlightPrice objects."""
         from app.collector.base import FlightSegment
 
         results: list[FlightPrice] = []
+
+        # Map travel_class number to fare class string
+        fare_class_map = {
+            1: "main_cabin",
+            2: "premium_economy",
+            3: "business",
+            4: "first",
+        }
+        fare_class = fare_class_map.get(travel_class, "main_cabin")
 
         # Google Flights returns "best_flights" and "other_flights"
         all_flights = []
@@ -150,8 +175,8 @@ class SerpAPIFlightSource(FlightDataSource):
                 departure_time = departure_info.get("time", "")
                 arrival_time = arrival_info.get("time", "")
 
-                # Determine fare class
-                fare_class = self._determine_fare_class(flight_group)
+                # Use the fare class from the travel_class parameter
+                # (already determined above from the API request)
 
                 # Build a reasonable flight number
                 if not flight_number:

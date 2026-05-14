@@ -1,10 +1,11 @@
 """Strawberry GraphQL schema and resolvers for the Flight Deal Tracker."""
 
-from datetime import date, datetime
+import itertools
+from datetime import date, datetime, timedelta
 from typing import Optional
 
 import strawberry
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import selectinload
 from strawberry.fastapi import GraphQLRouter
 
@@ -39,9 +40,19 @@ class FlightOptionType:
     arrival_time: str
     fare_class: str
     price_cents: int
+    flight_date: date
     stops: int
     total_duration_minutes: int
     segments: list[FlightSegmentType]
+
+
+@strawberry.type
+class RoundTripOptionType:
+    """A paired outbound + return flight combination."""
+
+    outbound: FlightOptionType
+    return_flight: FlightOptionType
+    combined_price_cents: int
 
 
 @strawberry.type
@@ -98,6 +109,7 @@ class TripRequestType:
     price_history: list[PriceSnapshotType]
     latest_analysis: Optional[AnalysisResultType]
     top_flight_options: list[FlightOptionType]
+    round_trip_options: list[RoundTripOptionType]
 
 
 @strawberry.input
@@ -117,8 +129,11 @@ class TripRequestInput:
 # --- Helper functions ---
 
 
-def _map_trip_to_type(trip: TripRequest) -> TripRequestType:
+def _map_trip_to_type(trip: TripRequest, return_snapshots: list[PriceSnapshot] | None = None) -> TripRequestType:
     """Convert a SQLAlchemy TripRequest model to the GraphQL TripRequestType."""
+    # Use route snapshots (all fare classes) if available, fall back to trip snapshots
+    all_snapshots = trip.route.price_snapshots if trip.route and trip.route.price_snapshots else trip.price_snapshots
+
     # Map price history
     price_history = [
         PriceSnapshotType(
@@ -128,7 +143,7 @@ def _map_trip_to_type(trip: TripRequest) -> TripRequestType:
             flight_date=snap.flight_date,
             collected_at=snap.collected_at,
         )
-        for snap in trip.price_snapshots
+        for snap in all_snapshots
     ]
 
     # Get latest analysis (most recent by analyzed_at)
@@ -141,8 +156,14 @@ def _map_trip_to_type(trip: TripRequest) -> TripRequestType:
             analyzed_at=latest.analyzed_at,
         )
 
-    # Derive top flight options from the latest price snapshots
-    top_flight_options = _derive_top_flight_options(trip.price_snapshots, trip.latest_departure_time)
+    # Derive top flight options from the route's price snapshots (all fare classes)
+    top_flight_options = _derive_top_flight_options(all_snapshots, trip.latest_departure_time)
+
+    # Derive round-trip options when trip has return dates
+    if trip.earliest_return is not None:
+        round_trip_options = _derive_round_trip_options(all_snapshots, return_snapshots or [], trip)
+    else:
+        round_trip_options = []
 
     return TripRequestType(
         id=trip.id,
@@ -162,6 +183,7 @@ def _map_trip_to_type(trip: TripRequest) -> TripRequestType:
         price_history=price_history,
         latest_analysis=latest_analysis,
         top_flight_options=top_flight_options,
+        round_trip_options=round_trip_options,
     )
 
 
@@ -195,6 +217,32 @@ def _map_route_to_type(route: Route) -> RouteType:
     )
 
 
+def _get_latest_batch(snapshots: list[PriceSnapshot]) -> list[PriceSnapshot]:
+    """Get the latest batch of price snapshots per fare class using a 5-minute window.
+
+    For each fare class, finds the most recent collected_at timestamp and returns
+    all snapshots within a 5-minute window of that timestamp. This ensures premium
+    fares (collected once daily) are included alongside economy fares (collected
+    multiple times daily).
+    """
+    if not snapshots:
+        return []
+
+    # Group by fare class
+    by_fare_class: dict[str, list[PriceSnapshot]] = {}
+    for snap in snapshots:
+        by_fare_class.setdefault(snap.fare_class, []).append(snap)
+
+    # For each fare class, get the latest batch
+    result: list[PriceSnapshot] = []
+    for fare_class, group in by_fare_class.items():
+        latest_collected_at = max(s.collected_at for s in group)
+        cutoff_time = latest_collected_at - timedelta(minutes=5)
+        result.extend(s for s in group if s.collected_at >= cutoff_time)
+
+    return result
+
+
 def _derive_top_flight_options(snapshots: list[PriceSnapshot], latest_arrival_time: str | None = None) -> list[FlightOptionType]:
     """Derive top flight options from the latest price snapshots.
 
@@ -204,17 +252,8 @@ def _derive_top_flight_options(snapshots: list[PriceSnapshot], latest_arrival_ti
     if not snapshots:
         return []
 
-    # Find the latest collection timestamp
-    latest_collected_at = max(snap.collected_at for snap in snapshots)
-
-    # Use a 5-minute window to capture the entire batch
-    from datetime import timedelta
-    cutoff_time = latest_collected_at - timedelta(minutes=5)
-
     # Filter to only the most recent batch of snapshots
-    latest_snapshots = [
-        snap for snap in snapshots if snap.collected_at >= cutoff_time
-    ]
+    latest_snapshots = _get_latest_batch(snapshots)
 
     # Filter by arrival time constraint if set
     if latest_arrival_time:
@@ -223,8 +262,15 @@ def _derive_top_flight_options(snapshots: list[PriceSnapshot], latest_arrival_ti
             if not snap.arrival_time or _extract_time(snap.arrival_time) <= latest_arrival_time
         ]
 
-    # Sort by price and take top 10
-    sorted_snapshots = sorted(latest_snapshots, key=lambda s: s.price_cents)[:10]
+    # Sort by price and take top 10 per fare class
+    from itertools import groupby
+    fare_grouped = {}
+    for snap in sorted(latest_snapshots, key=lambda s: s.fare_class):
+        fare_grouped.setdefault(snap.fare_class, []).append(snap)
+
+    sorted_snapshots = []
+    for fare_class, group in fare_grouped.items():
+        sorted_snapshots.extend(sorted(group, key=lambda s: s.price_cents)[:10])
 
     return [
         FlightOptionType(
@@ -234,11 +280,96 @@ def _derive_top_flight_options(snapshots: list[PriceSnapshot], latest_arrival_ti
             arrival_time=snap.arrival_time,
             fare_class=snap.fare_class,
             price_cents=snap.price_cents,
+            flight_date=snap.flight_date,
             stops=snap.stops or 0,
             total_duration_minutes=snap.total_duration_minutes or 0,
             segments=_parse_segments_json(snap.segments_json),
         )
         for snap in sorted_snapshots
+    ]
+
+
+def _derive_round_trip_options(
+    outbound_snapshots: list[PriceSnapshot],
+    return_snapshots: list[PriceSnapshot],
+    trip: TripRequest,
+) -> list[RoundTripOptionType]:
+    """Derive round-trip flight options by pairing outbound and return flights.
+
+    Filters both sets of snapshots to the latest batch, applies date/time
+    constraints from the trip, forms the cartesian product, filters invalid
+    pairs, sorts by combined price, and returns the top 10.
+    """
+    if not outbound_snapshots or not return_snapshots:
+        return []
+
+    # Filter to latest batch for each direction
+    outbound_batch = _get_latest_batch(outbound_snapshots)
+    return_batch = _get_latest_batch(return_snapshots)
+
+    # Filter outbound flights by date range and time constraint
+    valid_outbound = [
+        snap for snap in outbound_batch
+        if trip.earliest_departure <= snap.flight_date <= trip.latest_departure
+    ]
+    if trip.latest_departure_time:
+        valid_outbound = [
+            snap for snap in valid_outbound
+            if not snap.arrival_time or _extract_time(snap.arrival_time) <= trip.latest_departure_time
+        ]
+
+    # Filter return flights by date range and time constraint
+    valid_return = [
+        snap for snap in return_batch
+        if trip.earliest_return <= snap.flight_date <= trip.latest_return
+    ]
+    if trip.latest_return_time:
+        valid_return = [
+            snap for snap in valid_return
+            if not snap.arrival_time or _extract_time(snap.arrival_time) <= trip.latest_return_time
+        ]
+
+    # Form cartesian product and filter pairs where return date >= outbound date
+    pairs = [
+        (out, ret)
+        for out, ret in itertools.product(valid_outbound, valid_return)
+        if ret.flight_date >= out.flight_date
+    ]
+
+    # Sort by combined price ascending and take top 10
+    pairs.sort(key=lambda p: p[0].price_cents + p[1].price_cents)
+    top_pairs = pairs[:10]
+
+    # Map to RoundTripOptionType objects
+    return [
+        RoundTripOptionType(
+            outbound=FlightOptionType(
+                airline=out.airline_code,
+                flight_number=out.flight_number,
+                departure_time=out.departure_time,
+                arrival_time=out.arrival_time,
+                fare_class=out.fare_class,
+                price_cents=out.price_cents,
+                flight_date=out.flight_date,
+                stops=out.stops or 0,
+                total_duration_minutes=out.total_duration_minutes or 0,
+                segments=_parse_segments_json(out.segments_json),
+            ),
+            return_flight=FlightOptionType(
+                airline=ret.airline_code,
+                flight_number=ret.flight_number,
+                departure_time=ret.departure_time,
+                arrival_time=ret.arrival_time,
+                fare_class=ret.fare_class,
+                price_cents=ret.price_cents,
+                flight_date=ret.flight_date,
+                stops=ret.stops or 0,
+                total_duration_minutes=ret.total_duration_minutes or 0,
+                segments=_parse_segments_json(ret.segments_json),
+            ),
+            combined_price_cents=out.price_cents + ret.price_cents,
+        )
+        for out, ret in top_pairs
     ]
 
 
@@ -301,10 +432,45 @@ class Query:
                 .options(
                     selectinload(TripRequest.price_snapshots),
                     selectinload(TripRequest.analysis_results),
+                    selectinload(TripRequest.route).selectinload(Route.price_snapshots),
                 )
             )
             trips = result.scalars().all()
-            return [_map_trip_to_type(trip) for trip in trips]
+
+            # Batch-query reverse routes for trips with return dates
+            trips_with_returns = [t for t in trips if t.earliest_return is not None]
+            reverse_route_pairs = set(
+                (t.destination, t.origin) for t in trips_with_returns
+            )
+
+            # Build a mapping of (origin, destination) -> list[PriceSnapshot] for reverse routes
+            reverse_snapshots_map: dict[tuple[str, str], list[PriceSnapshot]] = {}
+            if reverse_route_pairs:
+                conditions = [
+                    and_(Route.origin == orig, Route.destination == dest)
+                    for orig, dest in reverse_route_pairs
+                ]
+                reverse_result = await session.execute(
+                    select(Route)
+                    .where(or_(*conditions))
+                    .options(selectinload(Route.price_snapshots))
+                )
+                reverse_routes = reverse_result.scalars().all()
+                for route in reverse_routes:
+                    reverse_snapshots_map[(route.origin, route.destination)] = route.price_snapshots
+
+            # Map trips to types, passing return snapshots where applicable
+            mapped_trips = []
+            for trip in trips:
+                if trip.earliest_return is not None:
+                    return_snapshots = reverse_snapshots_map.get(
+                        (trip.destination, trip.origin), []
+                    )
+                else:
+                    return_snapshots = []
+                mapped_trips.append(_map_trip_to_type(trip, return_snapshots))
+
+            return mapped_trips
         return []
 
     @strawberry.field
@@ -317,12 +483,27 @@ class Query:
                 .options(
                     selectinload(TripRequest.price_snapshots),
                     selectinload(TripRequest.analysis_results),
+                    selectinload(TripRequest.route).selectinload(Route.price_snapshots),
                 )
             )
             trip = result.scalar_one_or_none()
             if trip is None:
                 return None
-            return _map_trip_to_type(trip)
+
+            # Look up reverse route for return snapshots
+            return_snapshots: list[PriceSnapshot] = []
+            if trip.earliest_return is not None:
+                reverse_result = await session.execute(
+                    select(Route)
+                    .where(Route.origin == trip.destination)
+                    .where(Route.destination == trip.origin)
+                    .options(selectinload(Route.price_snapshots))
+                )
+                reverse_route = reverse_result.scalar_one_or_none()
+                if reverse_route is not None:
+                    return_snapshots = reverse_route.price_snapshots
+
+            return _map_trip_to_type(trip, return_snapshots)
         return None
 
     @strawberry.field

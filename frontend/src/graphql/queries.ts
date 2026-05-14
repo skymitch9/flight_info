@@ -55,6 +55,7 @@ export const GET_TRIP_DETAIL = gql`
         arrivalTime
         fareClass
         priceCents
+        flightDate
         stops
         totalDurationMinutes
         segments {
@@ -66,6 +67,49 @@ export const GET_TRIP_DETAIL = gql`
           arrivalTime
           durationMinutes
         }
+      }
+      roundTripOptions {
+        outbound {
+          airline
+          flightNumber
+          departureTime
+          arrivalTime
+          fareClass
+          priceCents
+          flightDate
+          stops
+          totalDurationMinutes
+          segments {
+            airline
+            flightNumber
+            origin
+            destination
+            departureTime
+            arrivalTime
+            durationMinutes
+          }
+        }
+        returnFlight {
+          airline
+          flightNumber
+          departureTime
+          arrivalTime
+          fareClass
+          priceCents
+          flightDate
+          stops
+          totalDurationMinutes
+          segments {
+            airline
+            flightNumber
+            origin
+            destination
+            departureTime
+            arrivalTime
+            durationMinutes
+          }
+        }
+        combinedPriceCents
       }
     }
   }

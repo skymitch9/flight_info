@@ -86,12 +86,26 @@ def _build_tier_config(settings: Settings) -> dict:
 
 
 async def _run_collection() -> None:
-    """Execute a price collection cycle.
+    """Execute a price collection cycle for main cabin (economy) fares.
 
     Creates fully-wired services: CollectionService with ExampleFlightSource,
     PriceAnalyzer with LLMClient, and NotificationService. After collection
     and analysis, sends notifications if appropriate.
     """
+    await _run_collection_for_classes(travel_classes=[1])
+
+
+async def _run_premium_collection() -> None:
+    """Execute a price collection cycle for premium fares (premium economy, business, first).
+
+    Runs once daily to conserve API quota while still tracking premium fare prices.
+    """
+    await _run_collection_for_classes(travel_classes=[2, 3, 4])
+    logger.info("premium_fare_collection_complete")
+
+
+async def _run_collection_for_classes(travel_classes: list[int]) -> None:
+    """Execute a price collection cycle for specified travel classes."""
     from app.analyzer.service import PriceAnalyzer
     from app.collector.service import CollectionService
     from app.collector.sources.amadeus_source import AmadeusFlightSource
@@ -132,8 +146,8 @@ async def _run_collection() -> None:
     # Initialize CollectionService — prefer SerpAPI, fallback to Amadeus, then stub
     sources = []
     if settings.serpapi_key:
-        sources.append(SerpAPIFlightSource(api_key=settings.serpapi_key))
-        logger.info("serpapi_source_configured")
+        sources.append(SerpAPIFlightSource(api_key=settings.serpapi_key, travel_classes=travel_classes))
+        logger.info("serpapi_source_configured", travel_classes=travel_classes)
     elif settings.amadeus_api_key and settings.amadeus_api_secret:
         sources.append(
             AmadeusFlightSource(
@@ -256,7 +270,15 @@ async def lifespan(app: FastAPI):
         _run_collection,
         trigger=IntervalTrigger(hours=settings.collection_interval_hours),
         id="price_collection",
-        name="Periodic price collection",
+        name="Periodic price collection (main cabin)",
+        replace_existing=True,
+        max_instances=1,
+    )
+    scheduler.add_job(
+        _run_premium_collection,
+        trigger=IntervalTrigger(hours=24),
+        id="premium_price_collection",
+        name="Daily premium fare collection (business, first, premium economy)",
         replace_existing=True,
         max_instances=1,
     )

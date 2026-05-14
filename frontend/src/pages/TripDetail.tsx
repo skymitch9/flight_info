@@ -27,6 +27,7 @@ interface FlightOption {
   arrivalTime: string;
   fareClass: string;
   priceCents: number;
+  flightDate: string;
   stops: number;
   totalDurationMinutes: number;
   segments: {
@@ -38,6 +39,12 @@ interface FlightOption {
     arrivalTime: string;
     durationMinutes: number;
   }[];
+}
+
+interface RoundTripOption {
+  outbound: FlightOption;
+  returnFlight: FlightOption;
+  combinedPriceCents: number;
 }
 
 interface TripData {
@@ -54,6 +61,7 @@ interface TripData {
     priceHistory: PriceHistoryEntry[];
     latestAnalysis: AnalysisResult | null;
     topFlightOptions: FlightOption[];
+    roundTripOptions: RoundTripOption[];
   } | null;
 }
 
@@ -214,7 +222,7 @@ export default function TripDetail() {
       {/* Flight Options */}
       <div style={styles.section}>
         <h2 style={styles.sectionTitle}>AVAILABLE FLIGHTS</h2>
-        <FlightOptions options={trip.topFlightOptions} />
+        <FlightOptions options={trip.topFlightOptions} roundTripOptions={trip.roundTripOptions} />
       </div>
 
       {/* Edit Modal */}
