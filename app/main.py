@@ -104,6 +104,19 @@ async def _run_premium_collection() -> None:
     logger.info("premium_fare_collection_complete")
 
 
+async def _run_daily_digest() -> None:
+    """Send the daily flight digest email."""
+    from app.database import async_session_factory
+    from app.notifier.digest import DailyDigestService
+
+    settings = Settings()
+    digest_service = DailyDigestService(
+        settings=settings,
+        session_factory=async_session_factory,
+    )
+    await digest_service.send_daily_digest()
+
+
 async def _run_collection_for_classes(travel_classes: list[int]) -> None:
     """Execute a price collection cycle for specified travel classes."""
     from app.analyzer.service import PriceAnalyzer
@@ -282,6 +295,17 @@ async def lifespan(app: FastAPI):
         replace_existing=True,
         max_instances=1,
     )
+    if settings.digest_enabled:
+        from apscheduler.triggers.cron import CronTrigger
+        scheduler.add_job(
+            _run_daily_digest,
+            trigger=CronTrigger(hour=settings.digest_hour_utc, minute=0),
+            id="daily_digest",
+            name="Daily flight digest email",
+            replace_existing=True,
+            max_instances=1,
+        )
+        logger.info("daily_digest_scheduled", hour_utc=settings.digest_hour_utc)
     scheduler.start()
     logger.info(
         "Scheduler started",

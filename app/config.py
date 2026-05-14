@@ -7,10 +7,17 @@ class Settings(BaseSettings):
 
     # Email
     smtp_host: str
-    smtp_port: int = 587
+    smtp_port: int = 465
     smtp_username: str
     smtp_password: str
     notification_email: str
+
+    # Daily Digest
+    digest_enabled: bool = True
+    digest_hour_utc: int = 17  # 10 AM Arizona (UTC-7) = 17 UTC
+    digest_result_count: int = 3
+    digest_required_airlines: str = "DL"  # comma-separated, at least one must appear
+    digest_no_same_airline: bool = True  # results can't all be the same airline
 
     # LLM
     llm_api_key: str

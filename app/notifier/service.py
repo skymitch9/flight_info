@@ -241,5 +241,6 @@ class NotificationService:
             port=self.settings.smtp_port,
             username=self.settings.smtp_username,
             password=self.settings.smtp_password,
-            use_tls=True,
+            use_tls=self.settings.smtp_port == 465,
+            start_tls=self.settings.smtp_port != 465,
         )
