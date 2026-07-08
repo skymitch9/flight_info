@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, CheckConstraint, Column, Date, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, Column, Date, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 
 from app.database import Base
@@ -37,6 +37,8 @@ class TripRequest(Base):
     passenger_count = Column(Integer, nullable=False, default=1)
     carry_on_bags = Column(Integer, nullable=False, default=1)
     checked_bags = Column(Integer, nullable=False, default=0)
+    # Alert when the cheapest main-cabin fare (per ticket) drops to/below this
+    target_price_cents = Column(Integer, nullable=True)
     is_active = Column(Boolean, default=True)
     route_id = Column(Integer, ForeignKey("routes.id"), nullable=True)  # nullable during migration, enforced after
     status = Column(String(10), nullable=False, default="active")  # "active" | "fulfilled"
@@ -74,6 +76,12 @@ class PriceSnapshot(Base):
     segments_json = Column(Text, nullable=True)  # JSON array of segment details
     collected_at = Column(DateTime, default=datetime.utcnow)
 
+    __table_args__ = (
+        Index("ix_price_snapshots_route_collected", "route_id", "collected_at"),
+        Index("ix_price_snapshots_trip_request_id", "trip_request_id"),
+        Index("ix_price_snapshots_flight_date", "flight_date"),
+    )
+
     trip_request = relationship("TripRequest", back_populates="price_snapshots")
     route = relationship("Route", back_populates="price_snapshots")
 
@@ -87,7 +95,28 @@ class AnalysisResult(Base):
     explanation = Column(Text, nullable=False)
     analyzed_at = Column(DateTime, default=datetime.utcnow)
 
+    __table_args__ = (
+        Index("ix_analysis_results_trip_analyzed", "trip_request_id", "analyzed_at"),
+    )
+
     trip_request = relationship("TripRequest", back_populates="analysis_results")
+
+
+class ApiUsage(Base):
+    """Per-source, per-calendar-month count of external API searches.
+
+    Backs the quota budget guard: sources whose count reaches their monthly
+    budget are skipped for the rest of the month.
+    """
+
+    __tablename__ = "api_usage"
+
+    id = Column(Integer, primary_key=True)
+    source = Column(String(50), nullable=False)
+    month = Column(String(7), nullable=False)  # "YYYY-MM"
+    calls = Column(Integer, nullable=False, default=0)
+
+    __table_args__ = (UniqueConstraint("source", "month", name="uq_api_usage_source_month"),)
 
 
 class Notification(Base):
@@ -97,5 +126,9 @@ class Notification(Base):
     trip_request_id = Column(Integer, ForeignKey("trip_requests.id"), nullable=False)
     sent_at = Column(DateTime, default=datetime.utcnow)
     status = Column(String(10), nullable=False)  # "sent" | "failed"
+
+    __table_args__ = (
+        Index("ix_notifications_trip_sent", "trip_request_id", "sent_at"),
+    )
 
     trip_request = relationship("TripRequest", back_populates="notifications")

@@ -1,11 +1,13 @@
-fastapi
-uvicorn
-strawberry-graphql[fastapi]
-sqlalchemy[asyncio]
-asyncpg
-pydantic-settings
-httpx
-apscheduler
-structlog
-aiosmtplib
-jinja2
+# Pinned for reproducible builds (versions verified working 2026-07-08).
+# To upgrade: bump a pin, rebuild, run tests.
+fastapi==0.139.0
+uvicorn==0.51.0
+strawberry-graphql[fastapi]==0.320.3
+sqlalchemy[asyncio]==2.0.51
+asyncpg==0.31.0
+pydantic-settings==2.14.2
+httpx==0.28.1
+apscheduler==3.11.3
+structlog==26.1.0
+aiosmtplib==5.1.2
+jinja2==3.1.6

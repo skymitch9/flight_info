@@ -12,6 +12,7 @@ interface Trip {
   destination: string;
   earliestDeparture: string;
   latestDeparture: string;
+  collectionStartsOn?: string | null;
   latestAnalysis: LatestAnalysis | null;
 }
 
@@ -46,7 +47,7 @@ function getRecommendationColor(recommendation: string): string {
 }
 
 export default function TripCard({ trip }: TripCardProps) {
-  const { id, origin, destination, earliestDeparture, latestDeparture, latestAnalysis } = trip;
+  const { id, origin, destination, earliestDeparture, latestDeparture, latestAnalysis, collectionStartsOn } = trip;
 
   return (
     <Link to={`/trips/${id}`} style={{ textDecoration: 'none', color: 'inherit' }}>
@@ -64,7 +65,21 @@ export default function TripCard({ trip }: TripCardProps) {
           <h3 style={{ margin: 0, color: 'var(--text-h)', fontSize: '20px' }}>
             {origin} → {destination}
           </h3>
-          {latestAnalysis && (
+          {collectionStartsOn ? (
+            <span
+              style={{
+                fontSize: '13px',
+                fontWeight: 600,
+                padding: '4px 10px',
+                borderRadius: '12px',
+                color: '#fff',
+                backgroundColor: '#2563eb',
+              }}
+              title="Airlines haven't published fares this far out yet. Price tracking begins automatically on this date."
+            >
+              Tracking starts {collectionStartsOn}
+            </span>
+          ) : latestAnalysis && (
             <span
               style={{
                 fontSize: '13px',

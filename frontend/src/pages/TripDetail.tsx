@@ -63,6 +63,9 @@ interface TripData {
     passengerCount: number;
     carryOnBags: number;
     checkedBags: number;
+    targetPriceCents: number | null;
+    collectionStartsOn: string | null;
+    lastCollectedAt: string | null;
     priceHistory: PriceHistoryEntry[];
     latestAnalysis: AnalysisResult | null;
     topFlightOptions: FlightOption[];
@@ -176,6 +179,28 @@ export default function TripDetail() {
               </>
             )}
           </div>
+          <div style={styles.dates}>
+            {trip.targetPriceCents != null && (
+              <>
+                <span style={styles.dateLabel}>TARGET //</span>
+                <span style={styles.dateValue}>${Math.round(trip.targetPriceCents / 100)} PER TICKET (MAIN CABIN)</span>
+              </>
+            )}
+            {trip.lastCollectedAt && (
+              <>
+                <span style={{ ...styles.dateLabel, marginLeft: trip.targetPriceCents != null ? '1.5rem' : 0 }}>UPDATED //</span>
+                <span style={styles.dateValue}>
+                  {new Date(trip.lastCollectedAt.endsWith('Z') ? trip.lastCollectedAt : trip.lastCollectedAt + 'Z').toLocaleString()}
+                </span>
+              </>
+            )}
+            {trip.collectionStartsOn && (
+              <>
+                <span style={styles.dateLabel}>TRACKING //</span>
+                <span style={styles.dateValue}>STARTS {formatDate(trip.collectionStartsOn)} (FARES NOT PUBLISHED YET)</span>
+              </>
+            )}
+          </div>
         </div>
         <div style={styles.actions}>
           <button className="cp-button" onClick={() => triggerCollection()} disabled={scanning}>
@@ -227,7 +252,12 @@ export default function TripDetail() {
       {/* Flight Options */}
       <div style={styles.section}>
         <h2 style={styles.sectionTitle}>AVAILABLE FLIGHTS</h2>
-        <FlightOptions options={trip.topFlightOptions} roundTripOptions={trip.roundTripOptions} />
+        <FlightOptions
+          options={trip.topFlightOptions}
+          roundTripOptions={trip.roundTripOptions}
+          origin={trip.origin}
+          destination={trip.destination}
+        />
       </div>
 
       {/* Edit Modal */}
@@ -245,6 +275,7 @@ export default function TripDetail() {
             passengerCount: trip.passengerCount,
             carryOnBags: trip.carryOnBags,
             checkedBags: trip.checkedBags,
+            targetPriceCents: trip.targetPriceCents,
           }}
         />
       )}

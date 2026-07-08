@@ -17,7 +17,7 @@ interface FulfilledTrip {
   earliestReturn: string | null;
   latestReturn: string | null;
   status: string;
-  fulfilledAt: string;
+  fulfilledAt: string | null;
   latestAnalysis: AnalysisResult | null;
 }
 
@@ -41,7 +41,8 @@ function formatDate(dateStr: string): string {
   });
 }
 
-function formatFulfilledDate(dateStr: string): string {
+function formatFulfilledDate(dateStr: string | null): string {
+  if (!dateStr) return 'WINDOW PASSED';
   return new Date(dateStr).toLocaleDateString('en-US', {
     month: 'short', day: 'numeric', year: 'numeric',
   });
@@ -110,7 +111,7 @@ export default function ContractHistory() {
                       <span style={styles.route}>
                         {trip.origin} <span style={styles.arrow}>→</span> {trip.destination}
                       </span>
-                      <span style={styles.fulfilledBadge}>FULFILLED</span>
+                      <span style={styles.fulfilledBadge}>{trip.status === 'expired' ? 'EXPIRED' : 'FULFILLED'}</span>
                     </div>
 
                     <div style={styles.cardDates}>

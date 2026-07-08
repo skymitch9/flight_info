@@ -87,6 +87,14 @@ class DailyDigestService:
 
         from datetime import timedelta
 
+        # Only flights inside this trip's departure window — the route may
+        # carry snapshots for other trips' dates and reverse-leg collections
+        snapshots = [
+            s
+            for s in snapshots
+            if trip.earliest_departure <= s.flight_date <= trip.latest_departure
+        ]
+
         # Get latest batch per fare class (main_cabin only for digest)
         main_cabin = [s for s in snapshots if s.fare_class == "main_cabin"]
         if not main_cabin:

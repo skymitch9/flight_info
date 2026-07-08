@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flight Deal Alerts</title>
+</head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; color: #333333; background-color: #f5f5f5; margin: 0; padding: 16px;">
+    <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
+        <div style="background-color: #1a73e8; color: #ffffff; padding: 24px; text-align: center;">
+            <h1 style="margin: 0; font-size: 20px;">✈ Flight Deal Alerts</h1>
+            <p style="margin: 8px 0 0; font-size: 13px; opacity: 0.85;">{{ alerts|length }} trip{{ 's' if alerts|length != 1 }} with updates</p>
+        </div>
+
+        {% for alert in alerts %}
+        <div style="padding: 20px 24px; border-bottom: 4px solid #f5f5f5;">
+            <h2 style="margin: 0 0 4px; font-size: 17px; color: #1a1a1a;">
+                {{ alert.trip.origin }} → {{ alert.trip.destination }}
+            </h2>
+            <p style="margin: 0 0 12px; font-size: 12px; color: #777777;">
+                {{ alert.trip.earliest_departure.strftime('%b %d, %Y') }} – {{ alert.trip.latest_departure.strftime('%b %d, %Y') }}
+            </p>
+
+            {% if alert.target_note %}
+            <div style="background-color: #e6f4ea; border-left: 4px solid #16a34a; padding: 10px 14px; margin-bottom: 12px; font-weight: 600; color: #14532d; font-size: 13px;">
+                🎯 {{ alert.target_note }}
+            </div>
+            {% endif %}
+
+            <div style="margin-bottom: 12px;">
+                <span style="display: inline-block; background-color: #1a73e8; color: #ffffff; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; padding: 3px 10px; border-radius: 12px;">
+                    {{ alert.analysis.recommendation.replace('_', ' ') }}
+                </span>
+                <p style="margin: 8px 0 0; font-size: 13px; color: #555555;">{{ alert.analysis.explanation }}</p>
+            </div>
+
+            {% if alert.main_cabin_options %}
+            <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+                <tr style="border-bottom: 1px solid #e0e0e0;">
+                    <th style="text-align: left; padding: 6px 8px; color: #999999; font-size: 11px;">FLIGHT</th>
+                    <th style="text-align: left; padding: 6px 8px; color: #999999; font-size: 11px;">DEPART</th>
+                    <th style="text-align: right; padding: 6px 8px; color: #999999; font-size: 11px;">PRICE</th>
+                </tr>
+                {% for flight in alert.main_cabin_options[:3] %}
+                <tr style="border-bottom: 1px solid #f0f0f0;">
+                    <td style="padding: 6px 8px;">{{ flight.airline }} {{ flight.flight_number }}</td>
+                    <td style="padding: 6px 8px; color: #777777;">{{ flight.departure_date }} {{ flight.departure_time }}</td>
+                    <td style="padding: 6px 8px; text-align: right; font-weight: 700; color: #1a73e8;">${{ "%.2f"|format(flight.price_cents / 100) }}</td>
+                </tr>
+                {% endfor %}
+            </table>
+            {% endif %}
+
+            {% if alert.premium_highlights %}
+            <p style="margin: 10px 0 4px; font-size: 12px; font-weight: 700; color: #999999;">PREMIUM UPGRADES WORTH A LOOK</p>
+            {% for flight in alert.premium_highlights[:2] %}
+            <p style="margin: 2px 0; font-size: 12px; color: #555555;">
+                {{ flight.airline }} {{ flight.flight_number }} — {{ flight.fare_class.replace('_', ' ') }} — ${{ "%.2f"|format(flight.price_cents / 100) }}
+            </p>
+            {% endfor %}
+            {% endif %}
+        </div>
+        {% endfor %}
+
+        <div style="padding: 16px 24px; font-size: 11px; color: #999999; text-align: center;">
+            Flight Deal Tracker — one email per collection cycle, per-trip alerts throttled to once every 24h.
+        </div>
+    </div>
+</body>
+</html>

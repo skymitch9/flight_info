@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models import TripRequest
+from app.models import Route, TripRequest
 from app.route_tracker.service import RouteTracker
 
 
@@ -45,6 +45,7 @@ class TripInput:
     passenger_count: int = 1
     carry_on_bags: int = 1
     checked_bags: int = 0
+    target_price_cents: Optional[int] = None
 
 
 _IATA_CODE_PATTERN = re.compile(r"^[A-Z]{3}$")
@@ -60,17 +61,12 @@ class TripService:
         """Validate and create a new trip request.
 
         Also links the trip to a Route via RouteTracker. If the route was
-        dormant, it is reactivated so collection resumes.
+        dormant, it is reactivated so collection resumes. Round trips also
+        ensure the reverse route exists so return-leg prices get collected.
         """
         self._validate(input)
 
-        # Get or create the route for this origin-destination pair
-        route_tracker = RouteTracker(self.session)
-        route = await route_tracker.get_or_create_route(input.origin, input.destination)
-
-        # If the route was dormant, reactivate it for collection
-        if route.status == "dormant":
-            await route_tracker.reactivate_route(route.id)
+        route = await self._ensure_routes(input)
 
         trip = TripRequest(
             origin=input.origin,
@@ -84,6 +80,7 @@ class TripService:
             passenger_count=input.passenger_count,
             carry_on_bags=input.carry_on_bags,
             checked_bags=input.checked_bags,
+            target_price_cents=input.target_price_cents,
             is_active=True,
             route_id=route.id,
         )
@@ -100,13 +97,13 @@ class TripService:
         return list(result.scalars().all())
 
     async def list_fulfilled_trips(self) -> list[TripRequest]:
-        """Return all fulfilled trip requests with their relationships loaded.
+        """Return all completed trip contracts (fulfilled or expired).
 
         Eagerly loads price_snapshots and analysis_results for the history view.
         """
         result = await self.session.execute(
             select(TripRequest)
-            .where(TripRequest.status == "fulfilled")
+            .where(TripRequest.status.in_(["fulfilled", "expired"]))
             .options(
                 selectinload(TripRequest.price_snapshots),
                 selectinload(TripRequest.analysis_results),
@@ -143,9 +140,15 @@ class TripService:
         return trip
 
     async def update_trip(self, trip_id: int, input: TripInput) -> TripRequest:
-        """Validate and update an existing trip request."""
+        """Validate and update an existing trip request.
+
+        Re-links the trip to the correct route in case origin/destination
+        changed, and ensures the reverse route exists for round trips.
+        """
         self._validate(input)
         trip = await self.get_trip(trip_id)
+        route = await self._ensure_routes(input)
+        trip.route_id = route.id
         trip.origin = input.origin
         trip.destination = input.destination
         trip.earliest_departure = input.earliest_departure
@@ -157,6 +160,7 @@ class TripService:
         trip.passenger_count = input.passenger_count
         trip.carry_on_bags = input.carry_on_bags
         trip.checked_bags = input.checked_bags
+        trip.target_price_cents = input.target_price_cents
         await self.session.commit()
         await self.session.refresh(trip)
         return trip
@@ -167,6 +171,28 @@ class TripService:
         trip.is_active = False
         await self.session.commit()
         return True
+
+    async def _ensure_routes(self, input: TripInput) -> Route:
+        """Ensure routes exist for the trip, reactivating dormant ones.
+
+        Creates/reactivates the outbound route (origin→destination) and, for
+        round trips, the reverse route (destination→origin) so the collector
+        also gathers return-leg prices. Returns the outbound route.
+        """
+        route_tracker = RouteTracker(self.session)
+
+        route = await route_tracker.get_or_create_route(input.origin, input.destination)
+        if route.status == "dormant":
+            await route_tracker.reactivate_route(route.id)
+
+        if input.earliest_return is not None:
+            reverse = await route_tracker.get_or_create_route(
+                input.destination, input.origin
+            )
+            if reverse.status == "dormant":
+                await route_tracker.reactivate_route(reverse.id)
+
+        return route
 
     def _validate(self, input: TripInput) -> None:
         """Enforce business rules on trip input.
@@ -261,4 +287,11 @@ class TripService:
             raise TripValidationError(
                 "Checked bags must be between 0 and 5",
                 field="checked_bags",
+            )
+
+        # Target price validation (optional; per-ticket main cabin fare)
+        if input.target_price_cents is not None and input.target_price_cents <= 0:
+            raise TripValidationError(
+                "Target price must be greater than zero",
+                field="target_price_cents",
             )

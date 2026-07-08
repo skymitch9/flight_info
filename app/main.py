@@ -117,13 +117,144 @@ async def _run_daily_digest() -> None:
     await digest_service.send_daily_digest()
 
 
+async def _run_maintenance() -> None:
+    """Daily maintenance: archive expired trips and prune old snapshots."""
+    from datetime import date, datetime, timedelta
+
+    from sqlalchemy import delete, select, update
+
+    from app.database import async_session_factory
+    from app.models import PriceSnapshot, TripRequest
+
+    settings = Settings()
+
+    async with async_session_factory() as session:
+        # Archive trips whose entire departure window has passed — they move
+        # to the history view and stop consuming collection quota.
+        result = await session.execute(
+            update(TripRequest)
+            .where(
+                TripRequest.status == "active",
+                TripRequest.is_active == True,  # noqa: E712
+                TripRequest.latest_departure < date.today(),
+            )
+            .values(is_active=False, status="expired")
+        )
+        if result.rowcount:
+            logger.info("trips_auto_expired", count=result.rowcount)
+
+        # Prune snapshots past the retention window to keep queries fast
+        if settings.snapshot_retention_days > 0:
+            cutoff = datetime.utcnow() - timedelta(days=settings.snapshot_retention_days)
+            result = await session.execute(
+                delete(PriceSnapshot).where(PriceSnapshot.collected_at < cutoff)
+            )
+            if result.rowcount:
+                logger.info(
+                    "snapshots_pruned",
+                    count=result.rowcount,
+                    retention_days=settings.snapshot_retention_days,
+                )
+
+        await session.commit()
+
+
+# In-memory throttle for staleness alerts (at most one per 24h per process)
+_last_staleness_alert = None
+
+
+async def _check_collection_staleness() -> None:
+    """Alert by email when collection has silently stopped producing data.
+
+    Considered stale when the newest route collection is older than twice the
+    collection interval while at least one active trip is within the booking
+    horizon (i.e. collection *should* be happening).
+    """
+    global _last_staleness_alert
+    from datetime import date, datetime, timedelta
+
+    from sqlalchemy import func, select
+
+    from app.database import async_session_factory
+    from app.models import Route, TripRequest
+
+    settings = Settings()
+
+    async with async_session_factory() as session:
+        last_collected = (
+            await session.execute(select(func.max(Route.last_collected_at)))
+        ).scalar()
+
+        horizon_end = date.today() + timedelta(days=settings.booking_horizon_days)
+        collectable_trips = (
+            await session.execute(
+                select(func.count(TripRequest.id)).where(
+                    TripRequest.status == "active",
+                    TripRequest.is_active == True,  # noqa: E712
+                    TripRequest.earliest_departure <= horizon_end,
+                    TripRequest.latest_departure >= date.today(),
+                )
+            )
+        ).scalar()
+
+    if not collectable_trips or last_collected is None:
+        return  # nothing should be collecting — silence is expected
+
+    staleness = datetime.utcnow() - last_collected
+    threshold = timedelta(hours=settings.collection_interval_hours * 2)
+    if staleness <= threshold:
+        return
+
+    if _last_staleness_alert and datetime.utcnow() - _last_staleness_alert < timedelta(hours=24):
+        return  # already alerted recently
+
+    logger.error(
+        "collection_stale",
+        last_collected=str(last_collected),
+        staleness_hours=round(staleness.total_seconds() / 3600, 1),
+    )
+
+    from email.mime.text import MIMEText
+
+    import aiosmtplib
+
+    hours = round(staleness.total_seconds() / 3600)
+    message = MIMEText(
+        f"Flight Deal Tracker has not collected any prices in {hours} hours "
+        f"(expected every {settings.collection_interval_hours}h).\n\n"
+        "Likely causes: expired/exhausted API keys, all data sources failing, "
+        "or a scheduler problem. Check the app logs:\n"
+        "  docker compose logs app | grep -E 'source_failed|source_budget_exhausted|collection'\n"
+    )
+    message["From"] = settings.smtp_username
+    message["To"] = settings.notification_email
+    message["Subject"] = f"⚠ Flight Tracker: price collection stale ({hours}h)"
+
+    try:
+        await aiosmtplib.send(
+            message,
+            hostname=settings.smtp_host,
+            port=settings.smtp_port,
+            username=settings.smtp_username,
+            password=settings.smtp_password,
+            use_tls=settings.smtp_port == 465,
+            start_tls=settings.smtp_port != 465,
+        )
+        _last_staleness_alert = datetime.utcnow()
+        logger.info("staleness_alert_sent")
+    except Exception as exc:
+        logger.error("staleness_alert_failed", error=str(exc))
+
+
 async def _run_collection_for_classes(travel_classes: list[int]) -> None:
     """Execute a price collection cycle for specified travel classes."""
     from app.analyzer.service import PriceAnalyzer
     from app.collector.service import CollectionService
     from app.collector.sources.amadeus_source import AmadeusFlightSource
     from app.collector.sources.example_source import ExampleFlightSource
+    from app.collector.sources.searchapi_source import SearchAPIFlightSource
     from app.collector.sources.serpapi_source import SerpAPIFlightSource
+    from app.collector.sources.travelpayouts_source import TravelpayoutsFlightSource
     from app.database import async_session_factory
     from app.llm.client import LLMClient
     from app.models import TripRequest
@@ -156,12 +287,20 @@ async def _run_collection_for_classes(travel_classes: list[int]) -> None:
         tier_engine=tier_engine,
     )
 
-    # Initialize CollectionService — prefer SerpAPI, fallback to Amadeus, then stub
+    # Build the source chain in reliability order — the first source that
+    # returns results for a date wins; the rest are fallbacks used on error,
+    # empty results, or an exhausted monthly budget.
+    #   1. SerpAPI      — live Google Flights scrape (best data)
+    #   2. SearchAPI.io — live Google Flights scrape (equivalent data)
+    #   3. Amadeus      — real GDS, but limited test data (Self-Service API
+    #                     is being decommissioned by Amadeus in 2026)
+    #   4. Travelpayouts — free cached prices (hours-to-days old, economy only)
     sources = []
     if settings.serpapi_key:
         sources.append(SerpAPIFlightSource(api_key=settings.serpapi_key, travel_classes=travel_classes))
-        logger.info("serpapi_source_configured", travel_classes=travel_classes)
-    elif settings.amadeus_api_key and settings.amadeus_api_secret:
+    if settings.searchapi_key:
+        sources.append(SearchAPIFlightSource(api_key=settings.searchapi_key, travel_classes=travel_classes))
+    if settings.amadeus_api_key and settings.amadeus_api_secret:
         sources.append(
             AmadeusFlightSource(
                 api_key=settings.amadeus_api_key,
@@ -169,7 +308,14 @@ async def _run_collection_for_classes(travel_classes: list[int]) -> None:
                 use_production=settings.amadeus_production,
             )
         )
-        logger.info("amadeus_source_configured")
+    if settings.travelpayouts_token:
+        sources.append(TravelpayoutsFlightSource(token=settings.travelpayouts_token))
+    if sources:
+        logger.info(
+            "flight_sources_configured",
+            chain=[s.__class__.__name__ for s in sources],
+            travel_classes=travel_classes,
+        )
     else:
         sources.append(ExampleFlightSource())
         logger.warning("no_flight_api_credentials_using_stub_source")
@@ -178,6 +324,14 @@ async def _run_collection_for_classes(travel_classes: list[int]) -> None:
         sources=sources,
         session_factory=async_session_factory,
         analyzer=price_analyzer,
+        max_dates_per_trip=settings.max_dates_per_trip,
+        max_search_dates_per_route=settings.max_search_dates_per_route,
+        booking_horizon_days=settings.booking_horizon_days,
+        budgets={
+            "SerpAPIFlightSource": settings.serpapi_monthly_budget,
+            "SearchAPIFlightSource": settings.searchapi_monthly_budget,
+            "AmadeusFlightSource": settings.amadeus_monthly_budget,
+        },
     )
 
     try:
@@ -200,6 +354,9 @@ async def _run_collection_for_classes(travel_classes: list[int]) -> None:
             result = await session.execute(stmt)
             trips = result.scalars().all()
 
+            # Alerts across all trips are combined into a single email
+            pending_alerts = []
+
             for trip in trips:
                 if not trip.analysis_results:
                     continue
@@ -207,16 +364,33 @@ async def _run_collection_for_classes(travel_classes: list[int]) -> None:
                     trip.analysis_results, key=lambda a: a.analyzed_at
                 )
 
-                # Get the latest price snapshots for this trip
+                # Get the latest batch of price snapshots for this trip's route,
+                # restricted to flights inside the trip's departure window.
+                # Snapshots are stored at the route level (trip_request_id is NULL).
+                from datetime import timedelta
+
                 from app.models import PriceSnapshot
 
                 snap_stmt = (
                     select(PriceSnapshot)
-                    .where(PriceSnapshot.trip_request_id == trip.id)
+                    .where(
+                        PriceSnapshot.route_id == trip.route_id
+                        if trip.route_id is not None
+                        else PriceSnapshot.trip_request_id == trip.id
+                    )
+                    .where(PriceSnapshot.flight_date >= trip.earliest_departure)
+                    .where(PriceSnapshot.flight_date <= trip.latest_departure)
                     .order_by(PriceSnapshot.collected_at.desc())
                 )
                 snap_result = await session.execute(snap_stmt)
-                snapshots = snap_result.scalars().all()
+                all_snapshots = snap_result.scalars().all()
+
+                # Keep only the most recent collection batch (5-minute window)
+                snapshots = []
+                if all_snapshots:
+                    latest = all_snapshots[0].collected_at
+                    cutoff = latest - timedelta(minutes=5)
+                    snapshots = [s for s in all_snapshots if s.collected_at >= cutoff]
 
                 # Convert snapshots to FlightPrice objects for the notifier
                 from app.collector.base import FlightPrice
@@ -236,11 +410,31 @@ async def _run_collection_for_classes(travel_classes: list[int]) -> None:
                     for s in snapshots
                 ]
 
-                await notification_service.notify_if_appropriate(
+                # Target price check: alert when the cheapest main-cabin fare
+                # (per ticket) is at or below the trip's target, regardless of
+                # the LLM recommendation.
+                force_reason = None
+                if trip.target_price_cents:
+                    main_fares = [
+                        p.price_cents for p in prices if p.fare_class == "main_cabin"
+                    ]
+                    if main_fares and min(main_fares) <= trip.target_price_cents:
+                        force_reason = (
+                            f"A main cabin fare at ${min(main_fares) / 100:.0f} is at or "
+                            f"below your ${trip.target_price_cents / 100:.0f} target price."
+                        )
+
+                alert = await notification_service.build_alert(
                     trip=trip,
                     analysis=latest_analysis,
                     prices=prices,
+                    force_reason=force_reason,
                 )
+                if alert is not None:
+                    pending_alerts.append(alert)
+
+            # One email covering every trip that alerted this cycle
+            await notification_service.send_alerts(pending_alerts)
 
     except Exception as exc:
         logger.error("scheduled_collection_failed", error=str(exc))
@@ -249,16 +443,21 @@ async def _run_collection_for_classes(travel_classes: list[int]) -> None:
 def trigger_early_collection() -> None:
     """Schedule an immediate one-off collection run.
 
-    Call this when a new trip is created to ensure price data is collected
-    within 15 minutes rather than waiting for the next scheduled interval.
-    The job is added with `replace_existing=True` so multiple rapid trip
-    creations don't queue redundant runs.
+    Call this when a trip is created/updated (or collection is manually
+    triggered) so price data arrives within seconds rather than waiting for
+    the next scheduled interval. The job runs once and removes itself; it is
+    added with `replace_existing=True` so multiple rapid trip creations don't
+    queue redundant runs.
     """
+    from datetime import datetime, timedelta
+
+    from apscheduler.triggers.date import DateTrigger
+
     scheduler.add_job(
         _run_collection,
-        trigger=IntervalTrigger(minutes=1),
+        trigger=DateTrigger(run_date=datetime.now() + timedelta(seconds=5)),
         id="early_collection",
-        name="Early collection after trip creation",
+        name="One-off collection after trip creation",
         replace_existing=True,
         max_instances=1,
     )
@@ -306,6 +505,22 @@ async def lifespan(app: FastAPI):
             max_instances=1,
         )
         logger.info("daily_digest_scheduled", hour_utc=settings.digest_hour_utc)
+    scheduler.add_job(
+        _run_maintenance,
+        trigger=IntervalTrigger(hours=24),
+        id="daily_maintenance",
+        name="Daily maintenance (expire trips, prune snapshots)",
+        replace_existing=True,
+        max_instances=1,
+    )
+    scheduler.add_job(
+        _check_collection_staleness,
+        trigger=IntervalTrigger(hours=6),
+        id="staleness_check",
+        name="Alert when price collection goes stale",
+        replace_existing=True,
+        max_instances=1,
+    )
     scheduler.start()
     logger.info(
         "Scheduler started",
@@ -384,9 +599,50 @@ async def health_check_full():
     try:
         settings = Settings()
         checks["serpapi"] = "configured" if settings.serpapi_key else "not configured"
+        checks["searchapi"] = "configured" if settings.searchapi_key else "not configured"
+        checks["travelpayouts"] = "configured" if settings.travelpayouts_token else "not configured"
         checks["llm"] = "configured" if settings.llm_api_key else "not configured"
     except Exception:
         checks["config"] = "error"
+
+    # Collection freshness
+    try:
+        from datetime import datetime
+
+        from sqlalchemy import func
+
+        from app.models import Route
+
+        async with async_session_factory() as session:
+            last_collected = (
+                await session.execute(select(func.max(Route.last_collected_at)))
+            ).scalar()
+        if last_collected:
+            age_hours = (datetime.utcnow() - last_collected).total_seconds() / 3600
+            checks["last_collection"] = last_collected.isoformat()
+            checks["collection_stale"] = age_hours > settings.collection_interval_hours * 2
+        else:
+            checks["last_collection"] = None
+            checks["collection_stale"] = False
+    except Exception:
+        checks["last_collection"] = "error"
+
+    # API quota usage this month
+    try:
+        from datetime import datetime as _dt
+
+        from app.models import ApiUsage
+
+        month = _dt.utcnow().strftime("%Y-%m")
+        async with async_session_factory() as session:
+            result = await session.execute(
+                select(ApiUsage).where(ApiUsage.month == month)
+            )
+            checks["api_usage_this_month"] = {
+                u.source: u.calls for u in result.scalars().all()
+            }
+    except Exception:
+        checks["api_usage_this_month"] = "error"
 
     overall = "ok" if checks.get("database") == "ok" and checks.get("scheduler") == "running" else "degraded"
     return {"status": overall, "checks": checks}

@@ -48,7 +48,7 @@ class PriceAnalyzer:
 
     async def analyze(
         self, trip: TripRequest, current_prices: list[FlightPrice]
-    ) -> AnalysisResultModel:
+    ) -> AnalysisResultModel | None:
         """Analyze price trends and produce a recommendation.
 
         Fetches price history for the trip, builds a prompt with context,
@@ -59,11 +59,29 @@ class PriceAnalyzer:
             current_prices: Latest collected flight prices for this trip.
 
         Returns:
-            The persisted AnalysisResult model instance.
+            The persisted AnalysisResult model instance, or None when there
+            is no price data to analyze.
         """
+        # Only prices within this trip's departure window are relevant —
+        # route-level collection may include dates for other trips on the route.
+        relevant_prices = [
+            p
+            for p in current_prices
+            if trip.earliest_departure <= p.departure_date <= trip.latest_departure
+        ]
+
         async with self.session_factory() as session:
-            history = await self._fetch_price_history(session, trip.id)
-            prompt = self._build_prompt(trip, current_prices, history)
+            history = await self._fetch_price_history(session, trip)
+
+            # Nothing to analyze (e.g. trip beyond the booking horizon, or no
+            # fares published yet) — don't store a meaningless recommendation.
+            if not relevant_prices and not history:
+                logger.info(
+                    "Skipping analysis for trip %d: no price data in window", trip.id
+                )
+                return None
+
+            prompt = self._build_prompt(trip, relevant_prices, history)
 
             try:
                 response = await self.llm.complete(prompt)
@@ -79,20 +97,33 @@ class PriceAnalyzer:
             return result
 
     async def _fetch_price_history(
-        self, session: AsyncSession, trip_request_id: int
+        self, session: AsyncSession, trip: TripRequest
     ) -> list[PriceSnapshot]:
-        """Fetch all price snapshots for a trip, ordered by collection time.
+        """Fetch relevant price history for a trip, ordered by collection time.
+
+        Snapshots are stored at the route level (trip_request_id is NULL), so
+        history is queried by route_id, restricted to main-cabin fares with a
+        flight date inside the trip's departure window — the prices the
+        recommendation is actually about. Falls back to legacy trip-linked
+        snapshots for data collected before route-level storage.
 
         Args:
             session: The async database session.
-            trip_request_id: The ID of the trip request.
+            trip: The TripRequest being analyzed.
 
         Returns:
             List of PriceSnapshot instances ordered by collected_at.
         """
         stmt = (
             select(PriceSnapshot)
-            .where(PriceSnapshot.trip_request_id == trip_request_id)
+            .where(
+                PriceSnapshot.route_id == trip.route_id
+                if trip.route_id is not None
+                else PriceSnapshot.trip_request_id == trip.id
+            )
+            .where(PriceSnapshot.fare_class == "main_cabin")
+            .where(PriceSnapshot.flight_date >= trip.earliest_departure)
+            .where(PriceSnapshot.flight_date <= trip.latest_departure)
             .order_by(PriceSnapshot.collected_at)
         )
         result = await session.execute(stmt)

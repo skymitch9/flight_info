@@ -19,6 +19,8 @@ interface Trip {
   earliestReturn: string | null;
   latestReturn: string | null;
   isActive: boolean;
+  collectionStartsOn: string | null;
+  lastCollectedAt: string | null;
   latestAnalysis: AnalysisResult | null;
 }
 
@@ -40,6 +42,19 @@ function formatDate(dateStr: string): string {
   return new Date(dateStr + 'T00:00:00').toLocaleDateString('en-US', {
     month: 'short', day: 'numeric',
   });
+}
+
+function formatAgo(isoTimestamp: string | null): string | null {
+  if (!isoTimestamp) return null;
+  // Backend timestamps are UTC without a zone suffix
+  const ts = new Date(isoTimestamp.endsWith('Z') ? isoTimestamp : isoTimestamp + 'Z').getTime();
+  if (isNaN(ts)) return null;
+  const mins = Math.floor((Date.now() - ts) / 60000);
+  if (mins < 1) return 'JUST NOW';
+  if (mins < 60) return `${mins}M AGO`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 48) return `${hours}H AGO`;
+  return `${Math.floor(hours / 24)}D AGO`;
 }
 
 export default function TripList() {
@@ -108,12 +123,12 @@ export default function TripList() {
       {/* Scan status feedback */}
       {scanStatus === 'running' && (
         <div style={styles.scanBanner}>
-          <span style={styles.scanPulse}>●</span> SCANNING FLIGHT DATA... THIS MAY TAKE A FEW SECONDS
+          <span style={styles.scanPulse}>●</span> REQUESTING SCAN...
         </div>
       )}
       {scanStatus === 'done' && (
         <div style={{ ...styles.scanBanner, borderColor: '#00F0FF', color: '#00F0FF' }}>
-          ✓ SCAN COMPLETE — PRICES UPDATED
+          ✓ SCAN STARTED — RUNS IN BACKGROUND, PRICES REFRESH IN A FEW MINUTES
         </div>
       )}
       {scanStatus === 'error' && (
@@ -137,7 +152,10 @@ export default function TripList() {
       ) : (
         <div style={styles.grid}>
           {trips.map((trip) => {
-            const badge = getRecommendationBadge(trip.latestAnalysis?.recommendation);
+            const badge = trip.collectionStartsOn
+              ? { label: `TRACKING FROM ${formatDate(trip.collectionStartsOn)}`, className: 'cp-badge cp-badge--pending' }
+              : getRecommendationBadge(trip.latestAnalysis?.recommendation);
+            const updatedAgo = formatAgo(trip.lastCollectedAt);
             return (
               <Link key={trip.id} to={`/trips/${trip.id}`} style={{ textDecoration: 'none' }}>
                 <div className="cp-card" style={styles.card}>
@@ -170,6 +188,7 @@ export default function TripList() {
 
                   <div style={styles.cardFooter}>
                     <span style={styles.cardId}>ID: {String(trip.id).padStart(4, '0')}</span>
+                    {updatedAgo && <span style={styles.cardId}>UPDATED {updatedAgo}</span>}
                     <span style={styles.cardAction}>ACCESS →</span>
                   </div>
                 </div>

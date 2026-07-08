@@ -57,77 +57,94 @@ class NotificationService:
             autoescape=True,
         )
 
-    async def notify_if_appropriate(
+    async def build_alert(
         self,
         trip: TripRequest,
         analysis: AnalysisResult,
         prices: list[FlightPrice],
-    ) -> None:
-        """Send a notification if the recommendation warrants it and not throttled.
+        force_reason: str | None = None,
+    ) -> dict | None:
+        """Build an alert section for a trip, or None if no alert is due.
 
-        Steps:
-        1. Skip if recommendation is WAIT
-        2. Check 24-hour throttle against last notification time
-        3. Filter main cabin options via TierEngine
-        4. Identify premium highlights via TierEngine
-        5. Format email using Jinja2 template
-        6. Send with retry (3 attempts, exponential backoff)
-        7. Record notification in DB
+        An alert is due when the recommendation is not WAIT (or force_reason
+        is set, e.g. the trip's target price was hit) and the trip has not
+        been notified within the last 24 hours.
 
-        Args:
-            trip: The TripRequest that was analyzed.
-            analysis: The AnalysisResult with the recommendation.
-            prices: All collected flight prices for this trip.
+        Returns:
+            A dict with keys trip/analysis/main_cabin_options/
+            premium_highlights/target_note, or None.
         """
-        # 1. Skip if recommendation is WAIT
-        if analysis.recommendation == Recommendation.WAIT.value:
+        if force_reason is None and analysis.recommendation == Recommendation.WAIT.value:
             logger.info(
                 "Skipping notification: recommendation is WAIT",
                 trip_id=trip.id,
             )
-            return
+            return None
 
         async with self.session_factory() as session:
-            # 2. Check 24-hour throttle
             if await self._is_throttled(session, trip.id):
                 logger.info(
                     "Skipping notification: throttled (within 24 hours)",
                     trip_id=trip.id,
                 )
-                return
+                return None
 
-            # 3. Filter main cabin options via TierEngine
-            main_cabin_prices = [
-                p for p in prices if p.fare_class == "main_cabin"
-            ]
-            main_cabin_options = self.tier_engine.filter_options(main_cabin_prices)
+        main_cabin_prices = [p for p in prices if p.fare_class == "main_cabin"]
+        return {
+            "trip": trip,
+            "analysis": analysis,
+            "main_cabin_options": self.tier_engine.filter_options(main_cabin_prices),
+            "premium_highlights": self.tier_engine.identify_premium_highlights(prices),
+            "target_note": force_reason,
+        }
 
-            # 4. Identify premium highlights
-            premium_highlights = self.tier_engine.identify_premium_highlights(prices)
+    async def send_alerts(self, alerts: list[dict]) -> None:
+        """Send a single combined email covering all due alerts.
 
-            # 5. Format email
-            subject, body = self._format_email(
-                trip, analysis, main_cabin_options, premium_highlights
-            )
+        One email per collection cycle regardless of how many trips alert —
+        each trip gets its own section. Records a Notification row per trip
+        so the 24-hour throttle applies individually.
 
-            # 6. Send with retry
-            success = await self._send_with_retry(subject, body)
+        Args:
+            alerts: Alert dicts produced by build_alert().
+        """
+        if not alerts:
+            return
 
-            # 7. Record notification in DB
-            status = "sent" if success else "failed"
-            notification = Notification(
-                trip_request_id=trip.id,
-                sent_at=datetime.utcnow(),
-                status=status,
-            )
-            session.add(notification)
+        subject = self._combined_subject(alerts)
+        template = self._jinja_env.get_template("combined_alert.html")
+        body = template.render(alerts=alerts)
+
+        success = await self._send_with_retry(subject, body)
+
+        status = "sent" if success else "failed"
+        async with self.session_factory() as session:
+            for alert in alerts:
+                session.add(
+                    Notification(
+                        trip_request_id=alert["trip"].id,
+                        sent_at=datetime.utcnow(),
+                        status=status,
+                    )
+                )
             await session.commit()
 
-            logger.info(
-                "Notification recorded",
-                trip_id=trip.id,
-                status=status,
-            )
+        logger.info(
+            "Combined notification recorded",
+            trips=[a["trip"].id for a in alerts],
+            status=status,
+        )
+
+    @staticmethod
+    def _combined_subject(alerts: list[dict]) -> str:
+        """Subject line summarizing all alerting trips."""
+        any_target = any(a["target_note"] for a in alerts)
+        routes = [f"{a['trip'].origin}→{a['trip'].destination}" for a in alerts]
+        shown = ", ".join(routes[:3])
+        if len(routes) > 3:
+            shown += f" +{len(routes) - 3} more"
+        prefix = "Target Price Hit" if any_target else "Flight Deal Alert"
+        return f"{prefix}: {shown}"
 
     async def _is_throttled(self, session: AsyncSession, trip_id: int) -> bool:
         """Check if a notification was sent for this trip within the last 24 hours.
@@ -149,39 +166,6 @@ class NotificationService:
         )
         result = await session.execute(stmt)
         return result.scalar_one_or_none() is not None
-
-    def _format_email(
-        self,
-        trip: TripRequest,
-        analysis: AnalysisResult,
-        main_cabin_options: list[FlightPrice],
-        premium_highlights: list[FlightPrice],
-    ) -> tuple[str, str]:
-        """Format the notification email using a Jinja2 template.
-
-        Args:
-            trip: The TripRequest being notified about.
-            analysis: The AnalysisResult with recommendation and explanation.
-            main_cabin_options: Filtered main cabin flight options (up to 3).
-            premium_highlights: Premium fare highlights within threshold.
-
-        Returns:
-            A tuple of (subject, html_body) for the email.
-        """
-        subject = (
-            f"Flight Deal Alert: {trip.origin} → {trip.destination} "
-            f"— {analysis.recommendation.replace('_', ' ').title()}"
-        )
-
-        template = self._jinja_env.get_template("deal_notification.html")
-        body = template.render(
-            trip=trip,
-            analysis=analysis,
-            main_cabin_options=main_cabin_options,
-            premium_highlights=premium_highlights,
-        )
-
-        return subject, body
 
     async def _send_with_retry(
         self, subject: str, body: str, max_retries: int = 3

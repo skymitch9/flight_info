@@ -2,6 +2,7 @@
 
 import itertools
 from datetime import date, datetime, timedelta
+from functools import lru_cache
 from typing import Optional
 
 import strawberry
@@ -107,15 +108,22 @@ class TripRequestType:
     passenger_count: int
     carry_on_bags: int
     checked_bags: int
+    target_price_cents: Optional[int]
     is_active: bool
     status: str
     fulfilled_at: Optional[datetime]
     created_at: datetime
     updated_at: datetime
+    # When the route's prices were last refreshed (null before first collection)
+    last_collected_at: Optional[datetime]
     price_history: list[PriceSnapshotType]
     latest_analysis: Optional[AnalysisResultType]
     top_flight_options: list[FlightOptionType]
     round_trip_options: list[RoundTripOptionType]
+    # Date when price collection will begin, or null if already collecting.
+    # Airlines publish fares ~330 days out; trips further ahead are "prepared"
+    # and picked up automatically once in range.
+    collection_starts_on: Optional[date]
 
 
 @strawberry.input
@@ -133,9 +141,30 @@ class TripRequestInput:
     passenger_count: Optional[int] = 1
     carry_on_bags: Optional[int] = 1
     checked_bags: Optional[int] = 0
+    target_price_cents: Optional[int] = None
 
 
 # --- Helper functions ---
+
+
+@lru_cache(maxsize=1)
+def _booking_horizon_days() -> int:
+    """Booking horizon from settings, cached for the process lifetime."""
+    from app.config import Settings
+
+    return Settings().booking_horizon_days
+
+
+def _collection_starts_on(trip: TripRequest) -> Optional[date]:
+    """Date collection begins for a trip, or None if already in range.
+
+    Collection starts when the trip's earliest departure comes within the
+    booking horizon (airlines publish fares ~330 days ahead).
+    """
+    horizon = _booking_horizon_days()
+    if trip.earliest_departure > date.today() + timedelta(days=horizon):
+        return trip.earliest_departure - timedelta(days=horizon)
+    return None
 
 
 def _map_trip_to_type(trip: TripRequest, return_snapshots: list[PriceSnapshot] | None = None) -> TripRequestType:
@@ -181,8 +210,15 @@ def _map_trip_to_type(trip: TripRequest, return_snapshots: list[PriceSnapshot] |
     )
     passenger_count = trip.passenger_count
 
-    # Derive top flight options from the route's price snapshots (all fare classes)
-    top_flight_options = _derive_top_flight_options(all_snapshots, trip.latest_departure_time, luggage, passenger_count)
+    # Derive top flight options from the route's price snapshots (all fare
+    # classes), restricted to this trip's departure window — the route may
+    # carry snapshots for other trips' dates and reverse-leg collections.
+    outbound_snapshots = [
+        s
+        for s in all_snapshots
+        if trip.earliest_departure <= s.flight_date <= trip.latest_departure
+    ]
+    top_flight_options = _derive_top_flight_options(outbound_snapshots, trip.latest_departure_time, luggage, passenger_count)
 
     # Derive round-trip options when trip has return dates
     if trip.earliest_return is not None:
@@ -203,15 +239,20 @@ def _map_trip_to_type(trip: TripRequest, return_snapshots: list[PriceSnapshot] |
         passenger_count=trip.passenger_count,
         carry_on_bags=trip.carry_on_bags,
         checked_bags=trip.checked_bags,
+        target_price_cents=trip.target_price_cents,
         is_active=trip.is_active,
         status=trip.status,
         fulfilled_at=trip.fulfilled_at,
         created_at=trip.created_at,
         updated_at=trip.updated_at,
+        last_collected_at=(
+            trip.route.last_collected_at if route_loaded and trip.route else None
+        ),
         price_history=price_history,
         latest_analysis=latest_analysis,
         top_flight_options=top_flight_options,
         round_trip_options=round_trip_options,
+        collection_starts_on=_collection_starts_on(trip),
     )
 
 
@@ -649,10 +690,17 @@ class Mutation:
                         passenger_count=input.passenger_count if input.passenger_count is not None else 1,
                         carry_on_bags=input.carry_on_bags if input.carry_on_bags is not None else 1,
                         checked_bags=input.checked_bags if input.checked_bags is not None else 0,
+                        target_price_cents=input.target_price_cents,
                     )
                 )
             except TripValidationError as e:
                 raise ValueError(e.message) from e
+
+            # Collect prices for the new trip right away instead of waiting
+            # for the next scheduled interval
+            from app.main import trigger_early_collection
+
+            trigger_early_collection()
 
             # Reload with relationships for the response
             await session.refresh(trip)
@@ -688,10 +736,16 @@ class Mutation:
                         passenger_count=input.passenger_count if input.passenger_count is not None else 1,
                         carry_on_bags=input.carry_on_bags if input.carry_on_bags is not None else 1,
                         checked_bags=input.checked_bags if input.checked_bags is not None else 0,
+                        target_price_cents=input.target_price_cents,
                     ),
                 )
             except TripValidationError as e:
                 raise ValueError(e.message) from e
+
+            # The travel window or route may have changed — refresh prices soon
+            from app.main import trigger_early_collection
+
+            trigger_early_collection()
 
             # Reload with relationships for the response
             result = await session.execute(
@@ -748,10 +802,15 @@ class Mutation:
 
     @strawberry.mutation
     async def trigger_collection(self) -> bool:
-        """Manually trigger a price collection cycle. Awaits completion."""
-        from app.main import _run_collection
+        """Manually trigger a price collection cycle.
 
-        await _run_collection()
+        Schedules a one-off collection run and returns immediately — a full
+        cycle can take minutes, which would time out the HTTP request if
+        awaited inline.
+        """
+        from app.main import trigger_early_collection
+
+        trigger_early_collection()
         return True
 
 

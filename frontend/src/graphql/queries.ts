@@ -16,6 +16,9 @@ export const GET_TRIPS = gql`
       passengerCount
       carryOnBags
       checkedBags
+      targetPriceCents
+      collectionStartsOn
+      lastCollectedAt
       latestAnalysis {
         recommendation
         explanation
@@ -41,6 +44,9 @@ export const GET_TRIP_DETAIL = gql`
       passengerCount
       carryOnBags
       checkedBags
+      targetPriceCents
+      collectionStartsOn
+      lastCollectedAt
       status
       priceHistory {
         airlineCode

@@ -34,6 +34,13 @@ interface RoundTripOption {
 interface FlightOptionsProps {
   options: FlightOption[];
   roundTripOptions?: RoundTripOption[];
+  origin: string;
+  destination: string;
+}
+
+function googleFlightsUrl(origin: string, destination: string, date: string): string {
+  const q = `Flights from ${origin} to ${destination} on ${date}`;
+  return `https://www.google.com/travel/flights?q=${encodeURIComponent(q)}`;
 }
 
 const ALL_TAB = 'All';
@@ -212,7 +219,7 @@ function SegmentDetail({ segments }: { segments: FlightSegment[] }) {
   );
 }
 
-function FlightRow({ option }: { option: FlightOption }) {
+function FlightRow({ option, origin, destination }: { option: FlightOption; origin: string; destination: string }) {
   const [expanded, setExpanded] = useState(false);
 
   return (
@@ -240,13 +247,25 @@ function FlightRow({ option }: { option: FlightOption }) {
             <span style={{ color: '#00F0FF', fontWeight: 700, marginLeft: '0.5rem' }}>{formatPrice(option.priceCents)}</span>
           )}
         </td>
+        <td style={styles.td}>
+          <a
+            href={googleFlightsUrl(origin, destination, option.flightDate)}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={styles.bookLink}
+            onClick={(e) => e.stopPropagation()}
+            title="Open this route and date on Google Flights"
+          >
+            BOOK ↗
+          </a>
+        </td>
         <td style={{ ...styles.td, color: '#555577', cursor: 'pointer' }}>
           {option.segments.length > 0 ? (expanded ? '▾' : '▸') : ''}
         </td>
       </tr>
       {expanded && option.segments.length > 0 && (
         <tr>
-          <td colSpan={9} style={{ padding: 0 }}>
+          <td colSpan={10} style={{ padding: 0 }}>
             <SegmentDetail segments={option.segments} />
           </td>
         </tr>
@@ -255,7 +274,7 @@ function FlightRow({ option }: { option: FlightOption }) {
   );
 }
 
-export default function FlightOptions({ options, roundTripOptions }: FlightOptionsProps) {
+export default function FlightOptions({ options, roundTripOptions, origin, destination }: FlightOptionsProps) {
   const [activeTab, setActiveTab] = useState(ALL_TAB);
   const [selectedAirlines, setSelectedAirlines] = useState<Set<string>>(new Set());
   const [minPrice, setMinPrice] = useState<string>('');
@@ -419,11 +438,12 @@ export default function FlightOptions({ options, roundTripOptions }: FlightOptio
               <th style={styles.th}>DURATION</th>
               <th style={{ ...styles.th, textAlign: 'right' }}>PRICE</th>
               <th style={styles.th}></th>
+              <th style={styles.th}></th>
             </tr>
           </thead>
           <tbody>
             {[...filteredOptions].sort((a, b) => a.totalPriceCents - b.totalPriceCents).map((option, index) => (
-              <FlightRow key={index} option={option} />
+              <FlightRow key={index} option={option} origin={origin} destination={destination} />
             ))}
           </tbody>
         </table>
@@ -443,6 +463,7 @@ export default function FlightOptions({ options, roundTripOptions }: FlightOptio
                   <th style={styles.th}>RET DATE</th>
                   <th style={styles.th}>RETURN</th>
                   <th style={{ ...styles.th, textAlign: 'right' }}>TOTAL</th>
+                  <th style={styles.th}></th>
                 </tr>
               </thead>
               <tbody>
@@ -473,6 +494,18 @@ export default function FlightOptions({ options, roundTripOptions }: FlightOptio
                         {rt.totalCombinedPriceCents === rt.combinedPriceCents && (
                           <span style={{ color: '#00F0FF', fontWeight: 700, marginLeft: '0.5rem' }}>{formatPrice(rt.combinedPriceCents)}</span>
                         )}
+                      </td>
+                      <td style={styles.td}>
+                        <a
+                          href={googleFlightsUrl(origin, destination, rt.outbound.flightDate)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={styles.bookLink}
+                          onClick={(e) => e.stopPropagation()}
+                          title="Open this route on Google Flights"
+                        >
+                          BOOK ↗
+                        </a>
                       </td>
                     </tr>
                   );
@@ -675,5 +708,15 @@ const styles: Record<string, React.CSSProperties> = {
     width: '70px',
     padding: '0.3rem 0.4rem',
     fontSize: '0.75rem',
+  },
+  bookLink: {
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: '0.6rem',
+    color: '#FCEE09',
+    border: '1px solid #FCEE0944',
+    padding: '0.2rem 0.5rem',
+    textDecoration: 'none',
+    letterSpacing: '1px',
+    whiteSpace: 'nowrap',
   },
 };

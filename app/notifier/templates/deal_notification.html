@@ -157,6 +157,11 @@
 
         <!-- Recommendation section -->
         <div class="recommendation">
+            {% if target_note %}
+            <div style="background-color: #e6f4ea; border-left: 4px solid #16a34a; padding: 12px 16px; margin-bottom: 12px; font-weight: 600; color: #14532d;">
+                🎯 {{ target_note }}
+            </div>
+            {% endif %}
             <span class="badge">{{ analysis.recommendation.replace('_', ' ') }}</span>
             <div class="explanation">{{ analysis.explanation }}</div>
         </div>

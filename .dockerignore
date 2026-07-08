@@ -1,0 +1,20 @@
+# Keep the Docker build context small — only app/, scripts/, and
+# requirements.txt are copied into the backend image.
+.git
+.github
+.venv
+venv
+frontend
+node_modules
+__pycache__
+**/__pycache__
+*.py[cod]
+.env
+.env.*
+!.env.example
+db-snapshots
+pgdata
+.vscode
+.idea
+.kiro
+.claude

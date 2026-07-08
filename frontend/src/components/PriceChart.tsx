@@ -17,9 +17,11 @@ interface PriceChartProps {
 interface ChartDataPoint {
   timestamp: number;
   collectedAt: string;
-  mainCabin: number | null;
-  premium: number | null;
+  // Dynamic keys: one series per departure date (`d_2026-08-28`) plus `premium`
+  [key: string]: number | string | null;
 }
+
+const SERIES_COLORS = ['#00F0FF', '#16f0a0', '#c792ea', '#ff9e64', '#FF003C', '#7aa2f7'];
 
 type TimeScale = 'minutes' | 'hours' | 'days' | 'months';
 
@@ -63,29 +65,53 @@ function formatTooltipLabel(timestamp: number, scale: TimeScale): string {
   }
 }
 
-function transformData(priceHistory: PriceHistoryEntry[]): ChartDataPoint[] {
-  // Group by collectedAt timestamp (within 1 minute window)
-  const grouped = new Map<number, { mainCabin: number[]; premium: number[]; raw: string }>();
+function transformData(priceHistory: PriceHistoryEntry[]): { data: ChartDataPoint[]; dateKeys: string[] } {
+  // Group by collectedAt timestamp (within a 5-minute batch window), then
+  // track the *cheapest* main-cabin fare per departure date as its own
+  // series, plus a single cheapest-premium series across dates.
+  const grouped = new Map<number, { byDate: Map<string, number>; premium: number[]; raw: string }>();
+  const dateKeySet = new Set<string>();
 
   for (const entry of priceHistory) {
     const ts = new Date(entry.collectedAt).getTime();
-    // Round to nearest minute to group batch entries
-    const roundedTs = Math.round(ts / 60000) * 60000;
+    const roundedTs = Math.round(ts / 300000) * 300000; // 5-minute buckets
 
-    if (!grouped.has(roundedTs)) grouped.set(roundedTs, { mainCabin: [], premium: [], raw: entry.collectedAt });
+    if (!grouped.has(roundedTs)) grouped.set(roundedTs, { byDate: new Map(), premium: [], raw: entry.collectedAt });
     const group = grouped.get(roundedTs)!;
     const priceDollars = entry.priceCents / 100;
-    if (entry.fareClass === 'main_cabin') group.mainCabin.push(priceDollars);
-    else group.premium.push(priceDollars);
+
+    if (entry.fareClass === 'main_cabin') {
+      const key = `d_${entry.flightDate}`;
+      dateKeySet.add(key);
+      const existing = group.byDate.get(key);
+      if (existing === undefined || priceDollars < existing) group.byDate.set(key, priceDollars);
+    } else {
+      group.premium.push(priceDollars);
+    }
   }
 
   const sortedKeys = Array.from(grouped.keys()).sort((a, b) => a - b);
+  const dateKeys = Array.from(dateKeySet).sort();
 
-  return sortedKeys.map((key) => {
+  const data = sortedKeys.map((key) => {
     const group = grouped.get(key)!;
-    const avg = (arr: number[]) => arr.length > 0 ? Math.round((arr.reduce((s, p) => s + p, 0) / arr.length) * 100) / 100 : null;
-    return { timestamp: key, collectedAt: group.raw, mainCabin: avg(group.mainCabin), premium: avg(group.premium) };
+    const point: ChartDataPoint = { timestamp: key, collectedAt: group.raw };
+    for (const dk of dateKeys) {
+      point[dk] = group.byDate.get(dk) ?? null;
+    }
+    point.premium = group.premium.length > 0 ? Math.min(...group.premium) : null;
+    return point;
   });
+
+  return { data, dateKeys };
+}
+
+function dateKeyLabel(dateKey: string): string {
+  // "d_2026-08-28" -> "AUG 28"
+  const d = new Date(dateKey.slice(2) + 'T00:00:00');
+  return isNaN(d.getTime())
+    ? dateKey
+    : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }).toUpperCase();
 }
 
 export default function PriceChart({ priceHistory }: PriceChartProps) {
@@ -97,8 +123,9 @@ export default function PriceChart({ priceHistory }: PriceChartProps) {
     );
   }
 
-  const data = transformData(priceHistory);
+  const { data, dateKeys } = transformData(priceHistory);
   const scale = getTimeScale(data);
+  const hasPremium = data.some((p) => p.premium !== null);
 
   return (
     <ResponsiveContainer width="100%" height={300}>
@@ -131,24 +158,30 @@ export default function PriceChart({ priceHistory }: PriceChartProps) {
         <Legend
           wrapperStyle={{ fontFamily: 'Share Tech Mono', fontSize: '0.75rem' }}
         />
-        <Line
-          type="monotone"
-          dataKey="mainCabin"
-          name="MAIN CABIN"
-          stroke="#00F0FF"
-          strokeWidth={2}
-          dot={data.length < 20}
-          connectNulls
-        />
-        <Line
-          type="monotone"
-          dataKey="premium"
-          name="PREMIUM"
-          stroke="#FCEE09"
-          strokeWidth={2}
-          dot={data.length < 20}
-          connectNulls
-        />
+        {dateKeys.map((dk, i) => (
+          <Line
+            key={dk}
+            type="monotone"
+            dataKey={dk}
+            name={dateKeyLabel(dk)}
+            stroke={SERIES_COLORS[i % SERIES_COLORS.length]}
+            strokeWidth={2}
+            dot={data.length < 20}
+            connectNulls
+          />
+        ))}
+        {hasPremium && (
+          <Line
+            type="monotone"
+            dataKey="premium"
+            name="PREMIUM"
+            stroke="#FCEE09"
+            strokeWidth={2}
+            strokeDasharray="6 3"
+            dot={data.length < 20}
+            connectNulls
+          />
+        )}
       </LineChart>
     </ResponsiveContainer>
   );

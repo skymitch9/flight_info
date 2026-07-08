@@ -17,6 +17,7 @@ interface TripData {
   passengerCount?: number | null;
   carryOnBags?: number | null;
   checkedBags?: number | null;
+  targetPriceCents?: number | null;
 }
 
 interface TripFormProps {
@@ -34,6 +35,7 @@ interface FormErrors {
   passengerCount?: string;
   carryOnBags?: string;
   checkedBags?: string;
+  targetPrice?: string;
 }
 
 function parseDate(dateStr: string | null | undefined): Date | null {
@@ -64,6 +66,9 @@ export default function TripForm({ onClose, existingTrip }: TripFormProps) {
   const [passengerCount, setPassengerCount] = useState<number>(existingTrip?.passengerCount ?? 1);
   const [carryOnBags, setCarryOnBags] = useState<number>(existingTrip?.carryOnBags ?? 1);
   const [checkedBags, setCheckedBags] = useState<number>(existingTrip?.checkedBags ?? 0);
+  const [targetPrice, setTargetPrice] = useState<string>(
+    existingTrip?.targetPriceCents ? String(existingTrip.targetPriceCents / 100) : ''
+  );
   const [errors, setErrors] = useState<FormErrors>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
 
@@ -108,6 +113,7 @@ export default function TripForm({ onClose, existingTrip }: TripFormProps) {
     if (passengerCount < 1 || passengerCount > 9) newErrors.passengerCount = 'MUST BE 1-9';
     if (carryOnBags < 0 || carryOnBags > 2) newErrors.carryOnBags = 'MUST BE 0-2';
     if (checkedBags < 0 || checkedBags > 5) newErrors.checkedBags = 'MUST BE 0-5';
+    if (targetPrice && (isNaN(Number(targetPrice)) || Number(targetPrice) <= 0)) newErrors.targetPrice = 'INVALID PRICE';
 
     return newErrors;
   }
@@ -131,6 +137,7 @@ export default function TripForm({ onClose, existingTrip }: TripFormProps) {
       passengerCount,
       carryOnBags,
       checkedBags,
+      targetPriceCents: targetPrice ? Math.round(Number(targetPrice) * 100) : null,
     };
 
     if (isEditMode && existingTrip) {
@@ -316,6 +323,24 @@ export default function TripForm({ onClose, existingTrip }: TripFormProps) {
                 onChange={(e) => setCheckedBags(parseInt(e.target.value) || 0)}
               />
               {errors.checkedBags && <span style={styles.error}>{errors.checkedBags}</span>}
+            </div>
+          </div>
+
+          {/* Target Price */}
+          <div style={styles.row}>
+            <div style={styles.field}>
+              <label style={styles.label}>TARGET PRICE $ <span style={styles.optional}>(OPT — ALERT WHEN A MAIN CABIN FARE DROPS TO/BELOW THIS, PER TICKET)</span></label>
+              <input
+                className="cp-input"
+                style={styles.input}
+                type="number"
+                min={1}
+                step="1"
+                placeholder="e.g. 150"
+                value={targetPrice}
+                onChange={(e) => setTargetPrice(e.target.value)}
+              />
+              {errors.targetPrice && <span style={styles.error}>{errors.targetPrice}</span>}
             </div>
           </div>
 

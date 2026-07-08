@@ -83,12 +83,17 @@ def build_current_prices_summary(current_prices: list) -> str:
     if not current_prices:
         return "No current price data available."
 
+    # Cap at the 25 cheapest to keep the prompt bounded
+    capped = sorted(current_prices, key=lambda p: p.price_cents)[:25]
+
     lines = []
-    for price in current_prices:
+    for price in capped:
         lines.append(
             f"- {price.airline} {price.flight_number}: "
             f"${price.price_cents / 100:.2f} ({price.fare_class}) "
-            f"dep {price.departure_time}"
+            f"{price.departure_date} dep {price.departure_time}"
         )
+    if len(current_prices) > len(capped):
+        lines.append(f"... and {len(current_prices) - len(capped)} more options")
 
     return "\n".join(lines)
