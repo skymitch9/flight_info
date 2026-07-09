@@ -125,3 +125,17 @@ class TestSearchDatesForRoute:
         svc = make_service()
         trip = TripStub("PHX", "DFW", TODAY + timedelta(days=30), TODAY + timedelta(days=31))
         assert svc._search_dates_for_route(RouteStub("PHX", "ATL"), [trip]) == []
+
+
+class TestCloseInFilter:
+    def test_trip_within_window_included(self):
+        trip = TripStub("PHX", "DFW", TODAY + timedelta(days=10), TODAY + timedelta(days=11))
+        assert CollectionService.filter_close_in([trip], 14) == [trip]
+
+    def test_trip_beyond_window_excluded(self):
+        trip = TripStub("PHX", "DFW", TODAY + timedelta(days=30), TODAY + timedelta(days=31))
+        assert CollectionService.filter_close_in([trip], 14) == []
+
+    def test_boundary_day_included(self):
+        trip = TripStub("PHX", "DFW", TODAY + timedelta(days=14), TODAY + timedelta(days=15))
+        assert CollectionService.filter_close_in([trip], 14) == [trip]

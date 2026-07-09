@@ -115,6 +115,8 @@ All configuration lives in `.env` (see `.env.example` for the annotated template
 | `COLLECTION_HOUR_UTC` | No | `13` | UTC hour of the daily economy price collection (auto catch-up at startup if >26h stale) |
 | `PREMIUM_COLLECTION_WEEKDAY` | No | `tue` | Day(s) for the weekly premium-fare collection (cron syntax, e.g. `mon,thu`) |
 | `PREMIUM_COLLECTION_HOUR_UTC` | No | `13` | UTC hour for the premium-fare collection (auto catch-up at startup if >8 days stale) |
+| `CLOSEIN_WINDOW_DAYS` | No | `14` | Trips departing within this many days get a second daily economy collection |
+| `CLOSEIN_COLLECTION_HOUR_UTC` | No | `1` | UTC hour of the close-in evening collection (free while no trip is close-in) |
 | `MAX_DATES_PER_TRIP` | No | `3` | Max departure dates sampled from each trip's travel window per cycle |
 | `MAX_SEARCH_DATES_PER_ROUTE` | No | `6` | Cap on searched dates per route per cycle (bounds API quota usage) |
 | `BOOKING_HORIZON_DAYS` | No | `330` | Dates further out are not searched (airlines don't publish fares that far ahead); trips beyond it are "prepared" and start tracking automatically once in range |
@@ -123,7 +125,7 @@ All configuration lives in `.env` (see `.env.example` for the annotated template
 
 ### Collection cadence & API quota (SerpAPI)
 
-Fare changes flow through ATPCO continuously — there is no specific hour when prices update — so intra-day polling mostly re-reads the same prices. The tracker therefore collects **economy once daily** (default 13:00 UTC, after overnight repricing and before the morning digest) and **premium once weekly** (Tuesdays by default; premium fares move slowly and cost 3 searches per date). The dashboard's **RUN SCAN** button always does an immediate full refresh of all cabins when you want fresh numbers right now.
+Fare changes flow through ATPCO continuously — there is no specific hour when prices update — so intra-day polling mostly re-reads the same prices. The tracker therefore collects **economy once daily** (default 13:00 UTC, after overnight repricing and before the morning digest) and **premium once weekly** (Tuesdays by default; premium fares move slowly and cost 3 searches per date). Trips departing within **14 days** automatically get a **second daily evening collection**, since prices move fast close to departure. The dashboard's **RUN SCAN** button always does an immediate full refresh of all cabins when you want fresh numbers right now.
 
 Rough monthly usage (1 SerpAPI request per date per cabin class):
 

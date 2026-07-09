@@ -42,6 +42,12 @@ class Settings(BaseSettings):
     # ("tue", "mon,thu", ...), fixed times so restarts can't starve the job.
     premium_collection_weekday: str = "tue"
     premium_collection_hour_utc: int = 13
+    # Close-in boost: trips departing within this many days get a second
+    # daily economy collection (prices move fast near departure). Runs at
+    # closein_collection_hour_utc (default 01:00 UTC = 6 PM Arizona, the
+    # evening-repricing window). Costs nothing while no trip is close-in.
+    closein_window_days: int = 14
+    closein_collection_hour_utc: int = 1
 
     # Collection date sampling — bounds API quota usage per cycle.
     # Each trip contributes up to max_dates_per_trip evenly spaced dates from

@@ -83,7 +83,7 @@ class CollectionService:
         self.booking_horizon_days = booking_horizon_days
         self.budgets = budgets or {}
 
-    async def collect_all(self) -> None:
+    async def collect_all(self, max_days_out: int | None = None) -> None:
         """Run collection for all active routes.
 
         For each active route:
@@ -97,6 +97,11 @@ class CollectionService:
 
         Route failures are handled gracefully — a failing route is logged
         and skipped while collection continues with remaining routes.
+
+        Args:
+            max_days_out: When set, only trips departing within this many
+                days contribute search dates ("close-in" runs — prices move
+                fast near departure, so those trips get extra collections).
         """
         async with self.session_factory() as session:
             route_tracker = RouteTracker(session)
@@ -110,7 +115,17 @@ class CollectionService:
             )
             active_trips = list(result.scalars().all())
 
-        logger.info("collection_started", active_routes=len(routes))
+        if max_days_out is not None:
+            active_trips = self.filter_close_in(active_trips, max_days_out)
+            if not active_trips:
+                logger.info("closein_collection_skipped", reason="no close-in trips")
+                return
+
+        logger.info(
+            "collection_started",
+            active_routes=len(routes),
+            max_days_out=max_days_out,
+        )
 
         for route in routes:
             try:
@@ -145,6 +160,14 @@ class CollectionService:
                 )
 
         logger.info("collection_finished", active_routes=len(routes))
+
+    @staticmethod
+    def filter_close_in(
+        trips: list[TripRequest], max_days_out: int
+    ) -> list[TripRequest]:
+        """Return only trips whose departure window starts within max_days_out days."""
+        cutoff = date.today() + timedelta(days=max_days_out)
+        return [t for t in trips if t.earliest_departure <= cutoff]
 
     def _search_dates_for_route(
         self, route: Route, active_trips: list[TripRequest]

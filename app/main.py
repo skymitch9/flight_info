@@ -114,6 +114,20 @@ async def _run_full_collection() -> None:
     logger.info("manual_full_collection_complete")
 
 
+async def _run_closein_collection() -> None:
+    """Second daily economy collection for trips departing soon.
+
+    Prices move fast inside the close-in window, so those trips get an
+    evening sample in addition to the morning run. Free while no trip is
+    close-in (the run exits before any API call).
+    """
+    settings = Settings()
+    await _run_collection_for_classes(
+        travel_classes=[1], max_days_out=settings.closein_window_days
+    )
+    logger.info("closein_collection_complete")
+
+
 async def _run_daily_digest() -> None:
     """Send the daily flight digest email."""
     from app.database import async_session_factory
@@ -257,8 +271,16 @@ async def _check_collection_staleness() -> None:
         logger.error("staleness_alert_failed", error=str(exc))
 
 
-async def _run_collection_for_classes(travel_classes: list[int]) -> None:
-    """Execute a price collection cycle for specified travel classes."""
+async def _run_collection_for_classes(
+    travel_classes: list[int], max_days_out: int | None = None
+) -> None:
+    """Execute a price collection cycle for specified travel classes.
+
+    Args:
+        travel_classes: Cabin classes to collect (1=economy ... 4=first).
+        max_days_out: When set, restrict to trips departing within this
+            many days (close-in runs).
+    """
     from app.analyzer.service import PriceAnalyzer
     from app.collector.service import CollectionService
     from app.collector.sources.amadeus_source import AmadeusFlightSource
@@ -347,7 +369,7 @@ async def _run_collection_for_classes(travel_classes: list[int]) -> None:
 
     try:
         # Run collection (collects prices, stores snapshots, runs analysis)
-        await collection_service.collect_all()
+        await collection_service.collect_all(max_days_out=max_days_out)
         logger.info("scheduled_collection_complete")
 
         # After analysis, check if notifications should be sent
@@ -531,6 +553,18 @@ async def lifespan(app: FastAPI):
         trigger=_CronTrigger(hour=settings.collection_hour_utc, minute=0),
         id="price_collection",
         name="Daily price collection (main cabin)",
+        replace_existing=True,
+        max_instances=1,
+    )
+
+    # Close-in boost: second daily economy sample for trips departing within
+    # the close-in window (evening US time — the inventory-refresh window).
+    # Exits before any API call while no trip qualifies.
+    scheduler.add_job(
+        _run_closein_collection,
+        trigger=_CronTrigger(hour=settings.closein_collection_hour_utc, minute=0),
+        id="closein_collection",
+        name="Close-in evening collection (trips departing soon)",
         replace_existing=True,
         max_instances=1,
     )
