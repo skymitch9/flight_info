@@ -33,6 +33,10 @@ class Settings(BaseSettings):
 
     # Scheduler
     collection_interval_hours: int = 6
+    # Daily premium-fare collection time (UTC hour). A fixed cron time is
+    # used instead of an interval so container restarts can't push the run
+    # perpetually into the future.
+    premium_collection_hour_utc: int = 9
 
     # Collection date sampling — bounds API quota usage per cycle.
     # Each trip contributes up to max_dates_per_trip evenly spaced dates from

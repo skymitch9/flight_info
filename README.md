@@ -113,6 +113,7 @@ All configuration lives in `.env` (see `.env.example` for the annotated template
 | `TERTIARY_THRESHOLD` | No | `0.30` | Price threshold (30%) for tertiary airline inclusion |
 | `PREMIUM_HIGHLIGHT_THRESHOLD` | No | `0.40` | Premium fare highlight threshold (within 40% of main cabin) |
 | `COLLECTION_INTERVAL_HOURS` | No | `6` | Hours between price collection runs |
+| `PREMIUM_COLLECTION_HOUR_UTC` | No | `9` | UTC hour for the daily premium-fare collection (auto catch-up at startup if stale) |
 | `MAX_DATES_PER_TRIP` | No | `3` | Max departure dates sampled from each trip's travel window per cycle |
 | `MAX_SEARCH_DATES_PER_ROUTE` | No | `6` | Cap on searched dates per route per cycle (bounds API quota usage) |
 | `BOOKING_HORIZON_DAYS` | No | `330` | Dates further out are not searched (airlines don't publish fares that far ahead); trips beyond it are "prepared" and start tracking automatically once in range |

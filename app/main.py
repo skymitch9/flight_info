@@ -486,14 +486,51 @@ async def lifespan(app: FastAPI):
         replace_existing=True,
         max_instances=1,
     )
+    # Fixed daily time (not an interval): IntervalTrigger schedules its first
+    # run 24h after startup, so any restart within 24h meant premium fares
+    # were never collected.
+    from apscheduler.triggers.cron import CronTrigger as _CronTrigger
+
     scheduler.add_job(
         _run_premium_collection,
-        trigger=IntervalTrigger(hours=24),
+        trigger=_CronTrigger(hour=settings.premium_collection_hour_utc, minute=30),
         id="premium_price_collection",
         name="Daily premium fare collection (business, first, premium economy)",
         replace_existing=True,
         max_instances=1,
     )
+
+    # Catch-up: if premium data is already stale (e.g. the app was down at
+    # the scheduled time, or restarts starved the old interval trigger),
+    # run a one-off premium collection shortly after startup.
+    from datetime import datetime as _dt, timedelta as _td
+
+    from sqlalchemy import func, select as _select
+
+    from app.database import async_session_factory as _asf
+    from app.models import PriceSnapshot as _PS
+
+    async with _asf() as _session:
+        _last_premium = (
+            await _session.execute(
+                _select(func.max(_PS.collected_at)).where(_PS.fare_class != "main_cabin")
+            )
+        ).scalar()
+    if _last_premium is None or _dt.utcnow() - _last_premium > _td(hours=25):
+        from apscheduler.triggers.date import DateTrigger as _DateTrigger
+
+        scheduler.add_job(
+            _run_premium_collection,
+            trigger=_DateTrigger(run_date=_dt.now() + _td(seconds=90)),
+            id="premium_catchup",
+            name="One-off premium fare catch-up (stale data at startup)",
+            replace_existing=True,
+            max_instances=1,
+        )
+        logger.info(
+            "premium_catchup_scheduled",
+            last_premium=str(_last_premium),
+        )
     if settings.digest_enabled:
         from apscheduler.triggers.cron import CronTrigger
         scheduler.add_job(
@@ -505,11 +542,24 @@ async def lifespan(app: FastAPI):
             max_instances=1,
         )
         logger.info("daily_digest_scheduled", hour_utc=settings.digest_hour_utc)
+    # Fixed daily time + a run shortly after startup (maintenance is cheap
+    # and idempotent) — an interval trigger would never fire if the app
+    # restarts within 24h.
     scheduler.add_job(
         _run_maintenance,
-        trigger=IntervalTrigger(hours=24),
+        trigger=_CronTrigger(hour=10, minute=0),
         id="daily_maintenance",
         name="Daily maintenance (expire trips, prune snapshots)",
+        replace_existing=True,
+        max_instances=1,
+    )
+    from apscheduler.triggers.date import DateTrigger as _StartupDateTrigger
+
+    scheduler.add_job(
+        _run_maintenance,
+        trigger=_StartupDateTrigger(run_date=_dt.now() + _td(seconds=30)),
+        id="startup_maintenance",
+        name="Maintenance catch-up at startup",
         replace_existing=True,
         max_instances=1,
     )
