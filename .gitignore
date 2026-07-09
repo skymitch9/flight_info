@@ -18,5 +18,9 @@ node_modules/
 # Docker
 pgdata/
 
-# Keep db-snapshots tracked (for portability between machines)
-# Run .\scripts\db-export.ps1 before pushing to save your data
+# Database snapshots stay local — never pushed to git.
+# Use .\scripts\db-export.ps1 / db-import.ps1 to move data between machines.
+db-snapshots/
+
+# Kiro IDE spec files
+.kiro/
