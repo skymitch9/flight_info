@@ -128,6 +128,27 @@ All configuration lives in `.env` (see `.env.example` for the annotated template
 
 `DATABASE_URL` is set automatically by docker-compose — leave it out of `.env` unless you run the backend outside Docker.
 
+### Getting the flight-data API keys
+
+All three are free and take a few minutes each. SerpAPI is the primary source; the other two are fallbacks used automatically when an earlier source errors, returns nothing, or exhausts its monthly budget. (UI labels drift over time — if a menu name differs, look for "API key"/"API token" wording.)
+
+**SerpAPI** (primary — live Google Flights) → `SERPAPI_KEY`
+1. Sign up at https://serpapi.com/users/sign_up (free plan: 250 searches/month)
+2. Verify your email address and phone number (both required before keys work)
+3. Open the dashboard at https://serpapi.com/dashboard — your **API Key** is shown at the top right; copy it
+
+**SearchAPI.io** (fallback — live Google Flights) → `SEARCHAPI_KEY`
+1. Sign up at https://www.searchapi.io (free tier: 100 requests)
+2. Verify your email
+3. The dashboard landing page shows your **API key** immediately — copy it
+
+**Travelpayouts** (last-resort fallback — free cached prices) → `TRAVELPAYOUTS_TOKEN`
+1. Sign up at https://www.travelpayouts.com (it's a travel affiliate network; pick any answer for the "how will you drive traffic" onboarding question — it doesn't affect API access)
+2. In the dashboard sidebar, open **Programs** and join the **Aviasales** program (the flight **Data API** answers under this program; ignore the Link API — that's for affiliate booking links)
+3. Click your **profile icon (top right) → Profile** (or go to `app.travelpayouts.com/profile`) and scroll to the **API token** section — click show/copy
+
+Paste each value into the matching line in `.env`, then `docker compose restart app`. Confirm they registered via the dashboard status strip or `curl localhost:8001/health/full` (each source flips to `"configured"`).
+
 ### Collection cadence & API quota (SerpAPI)
 
 Fare changes flow through ATPCO continuously — there is no specific hour when prices update — so intra-day polling mostly re-reads the same prices. The tracker therefore collects **economy once daily** (default 13:00 UTC, after overnight repricing and before the morning digest) and **premium once weekly** (Tuesdays by default; premium fares move slowly and cost 3 searches per date). Trips departing within **14 days** automatically get a **second daily evening collection**, since prices move fast close to departure. The dashboard's **RUN SCAN** button always does an immediate full refresh of all cabins when you want fresh numbers right now.
