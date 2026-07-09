@@ -128,7 +128,7 @@ export default function TripList() {
       )}
       {scanStatus === 'done' && (
         <div style={{ ...styles.scanBanner, borderColor: '#00F0FF', color: '#00F0FF' }}>
-          ✓ SCAN STARTED — RUNS IN BACKGROUND, PRICES REFRESH IN A FEW MINUTES
+          ✓ FULL SCAN STARTED (ALL CABINS) — RUNS IN BACKGROUND, PRICES REFRESH IN A FEW MINUTES
         </div>
       )}
       {scanStatus === 'error' && (

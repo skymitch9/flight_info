@@ -31,12 +31,17 @@ class Settings(BaseSettings):
     tertiary_threshold: float = 0.30
     premium_highlight_threshold: float = 0.40
 
-    # Scheduler
-    collection_interval_hours: int = 6
-    # Daily premium-fare collection time (UTC hour). A fixed cron time is
-    # used instead of an interval so container restarts can't push the run
-    # perpetually into the future.
-    premium_collection_hour_utc: int = 9
+    # Scheduler — daily cadence. Fare changes flow continuously (no magic
+    # hour), so intra-day polling mostly re-reads the same prices; one
+    # snapshot per day captures the trend at a quarter of the API cost.
+    # 13:00 UTC = 6 AM Arizona — after overnight/evening repricing, ahead
+    # of the morning digest.
+    collection_hour_utc: int = 13
+    # Premium fares (premium economy/business/first) change slowly and cost
+    # 3 searches per date — collect weekly. Cron day-of-week string
+    # ("tue", "mon,thu", ...), fixed times so restarts can't starve the job.
+    premium_collection_weekday: str = "tue"
+    premium_collection_hour_utc: int = 13
 
     # Collection date sampling — bounds API quota usage per cycle.
     # Each trip contributes up to max_dates_per_trip evenly spaced dates from

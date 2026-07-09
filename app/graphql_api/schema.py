@@ -802,15 +802,16 @@ class Mutation:
 
     @strawberry.mutation
     async def trigger_collection(self) -> bool:
-        """Manually trigger a price collection cycle.
+        """Manually trigger a full price refresh (all fare classes).
 
-        Schedules a one-off collection run and returns immediately — a full
-        cycle can take minutes, which would time out the HTTP request if
-        awaited inline.
+        Schedules a one-off run and returns immediately — a full cycle can
+        take minutes, which would time out the HTTP request if awaited
+        inline. Deliberate button presses grab everything (economy +
+        premium) even though scheduled runs are economy-daily/premium-weekly.
         """
-        from app.main import trigger_early_collection
+        from app.main import trigger_manual_refresh
 
-        trigger_early_collection()
+        trigger_manual_refresh()
         return True
 
 

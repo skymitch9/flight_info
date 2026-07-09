@@ -112,24 +112,28 @@ All configuration lives in `.env` (see `.env.example` for the annotated template
 | `SECONDARY_THRESHOLD` | No | `0.15` | Price threshold (15%) for secondary airline inclusion |
 | `TERTIARY_THRESHOLD` | No | `0.30` | Price threshold (30%) for tertiary airline inclusion |
 | `PREMIUM_HIGHLIGHT_THRESHOLD` | No | `0.40` | Premium fare highlight threshold (within 40% of main cabin) |
-| `COLLECTION_INTERVAL_HOURS` | No | `6` | Hours between price collection runs |
-| `PREMIUM_COLLECTION_HOUR_UTC` | No | `9` | UTC hour for the daily premium-fare collection (auto catch-up at startup if stale) |
+| `COLLECTION_HOUR_UTC` | No | `13` | UTC hour of the daily economy price collection (auto catch-up at startup if >26h stale) |
+| `PREMIUM_COLLECTION_WEEKDAY` | No | `tue` | Day(s) for the weekly premium-fare collection (cron syntax, e.g. `mon,thu`) |
+| `PREMIUM_COLLECTION_HOUR_UTC` | No | `13` | UTC hour for the premium-fare collection (auto catch-up at startup if >8 days stale) |
 | `MAX_DATES_PER_TRIP` | No | `3` | Max departure dates sampled from each trip's travel window per cycle |
 | `MAX_SEARCH_DATES_PER_ROUTE` | No | `6` | Cap on searched dates per route per cycle (bounds API quota usage) |
 | `BOOKING_HORIZON_DAYS` | No | `330` | Dates further out are not searched (airlines don't publish fares that far ahead); trips beyond it are "prepared" and start tracking automatically once in range |
 
 `DATABASE_URL` is set automatically by docker-compose — leave it out of `.env` unless you run the backend outside Docker.
 
-### API quota planning (SerpAPI)
+### Collection cadence & API quota (SerpAPI)
 
-Each collection cycle searches every active route for up to `MAX_SEARCH_DATES_PER_ROUTE` dates (1 SerpAPI request per route per date). Premium fares add 3× that once per day. Rough daily usage:
+Fare changes flow through ATPCO continuously — there is no specific hour when prices update — so intra-day polling mostly re-reads the same prices. The tracker therefore collects **economy once daily** (default 13:00 UTC, after overnight repricing and before the morning digest) and **premium once weekly** (Tuesdays by default; premium fares move slowly and cost 3 searches per date). The dashboard's **RUN SCAN** button always does an immediate full refresh of all cabins when you want fresh numbers right now.
+
+Rough monthly usage (1 SerpAPI request per date per cabin class):
 
 ```
-requests/day ≈ routes × dates × (24 / COLLECTION_INTERVAL_HOURS)   # economy
-             + routes × dates × 3                                  # daily premium run
+requests/month ≈ dates × 30          # daily economy
+              + dates × 3 × 4.3      # weekly premium (3 classes)
+              + manual scans × dates × 4
 ```
 
-The SerpAPI free tier is 250 searches/month — fine for 1-2 routes with `COLLECTION_INTERVAL_HOURS=24` and `MAX_SEARCH_DATES_PER_ROUTE=2`, but several routes at the default 6-hour cadence needs a paid tier. Tune these three variables to fit your plan.
+Example: 3 in-range search dates ≈ 90 + 39 ≈ **130/month**, which fits the free 250 tier with room for manual scans. Add fallback source keys (`SEARCHAPI_KEY`, `TRAVELPAYOUTS_TOKEN`) so collection continues if a budget runs out.
 
 ## Accessing the App
 

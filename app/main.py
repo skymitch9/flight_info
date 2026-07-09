@@ -12,7 +12,6 @@ from contextlib import asynccontextmanager
 
 import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.interval import IntervalTrigger
 from fastapi import FastAPI
 
 from app.config import Settings
@@ -98,10 +97,21 @@ async def _run_collection() -> None:
 async def _run_premium_collection() -> None:
     """Execute a price collection cycle for premium fares (premium economy, business, first).
 
-    Runs once daily to conserve API quota while still tracking premium fare prices.
+    Runs weekly to conserve API quota — premium fares move slowly and cost
+    3 searches per date.
     """
     await _run_collection_for_classes(travel_classes=[2, 3, 4])
     logger.info("premium_fare_collection_complete")
+
+
+async def _run_full_collection() -> None:
+    """Collect all fare classes in one pass (manual refresh).
+
+    Used by the dashboard's refresh button — a deliberate action, so it
+    grabs everything at once (4 searches per date instead of 1).
+    """
+    await _run_collection_for_classes(travel_classes=[1, 2, 3, 4])
+    logger.info("manual_full_collection_complete")
 
 
 async def _run_daily_digest() -> None:
@@ -201,7 +211,8 @@ async def _check_collection_staleness() -> None:
         return  # nothing should be collecting — silence is expected
 
     staleness = datetime.utcnow() - last_collected
-    threshold = timedelta(hours=settings.collection_interval_hours * 2)
+    # Daily cadence + generous slack for downtime around the cron hour
+    threshold = timedelta(hours=30)
     if staleness <= threshold:
         return
 
@@ -221,7 +232,7 @@ async def _check_collection_staleness() -> None:
     hours = round(staleness.total_seconds() / 3600)
     message = MIMEText(
         f"Flight Deal Tracker has not collected any prices in {hours} hours "
-        f"(expected every {settings.collection_interval_hours}h).\n\n"
+        f"(expected daily at {settings.collection_hour_utc}:00 UTC).\n\n"
         "Likely causes: expired/exhausted API keys, all data sources failing, "
         "or a scheduler problem. Check the app logs:\n"
         "  docker compose logs app | grep -E 'source_failed|source_budget_exhausted|collection'\n"
@@ -441,13 +452,13 @@ async def _run_collection_for_classes(travel_classes: list[int]) -> None:
 
 
 def trigger_early_collection() -> None:
-    """Schedule an immediate one-off collection run.
+    """Schedule an immediate one-off economy collection run.
 
-    Call this when a trip is created/updated (or collection is manually
-    triggered) so price data arrives within seconds rather than waiting for
-    the next scheduled interval. The job runs once and removes itself; it is
-    added with `replace_existing=True` so multiple rapid trip creations don't
-    queue redundant runs.
+    Call this when a trip is created/updated so baseline price data arrives
+    within seconds rather than waiting for tomorrow's scheduled run. Economy
+    only — premium fills in on the next weekly run or a manual refresh. The
+    job runs once and removes itself; `replace_existing=True` means rapid
+    trip creations don't queue redundant runs.
     """
     from datetime import datetime, timedelta
 
@@ -464,6 +475,27 @@ def trigger_early_collection() -> None:
     logger.info("early_collection_scheduled")
 
 
+def trigger_manual_refresh() -> None:
+    """Schedule an immediate one-off full refresh (all fare classes).
+
+    Backs the dashboard's refresh button. Costs 4 searches per date
+    (economy + 3 premium classes) — fine for a deliberate button press.
+    """
+    from datetime import datetime, timedelta
+
+    from apscheduler.triggers.date import DateTrigger
+
+    scheduler.add_job(
+        _run_full_collection,
+        trigger=DateTrigger(run_date=datetime.now() + timedelta(seconds=5)),
+        id="manual_refresh",
+        name="Manual full refresh (all fare classes)",
+        replace_existing=True,
+        max_instances=1,
+    )
+    logger.info("manual_refresh_scheduled")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan managing startup and shutdown events."""
@@ -476,33 +508,14 @@ async def lifespan(app: FastAPI):
     await create_tables()
     logger.info("Database tables initialized")
 
-    # Configure and start the scheduler
+    # Configure and start the scheduler.
+    # All recurring jobs use fixed cron times, never intervals: an
+    # IntervalTrigger schedules its first firing a full period after startup,
+    # so frequent restarts can starve the job forever.
     settings = Settings()
-    scheduler.add_job(
-        _run_collection,
-        trigger=IntervalTrigger(hours=settings.collection_interval_hours),
-        id="price_collection",
-        name="Periodic price collection (main cabin)",
-        replace_existing=True,
-        max_instances=1,
-    )
-    # Fixed daily time (not an interval): IntervalTrigger schedules its first
-    # run 24h after startup, so any restart within 24h meant premium fares
-    # were never collected.
+
     from apscheduler.triggers.cron import CronTrigger as _CronTrigger
-
-    scheduler.add_job(
-        _run_premium_collection,
-        trigger=_CronTrigger(hour=settings.premium_collection_hour_utc, minute=30),
-        id="premium_price_collection",
-        name="Daily premium fare collection (business, first, premium economy)",
-        replace_existing=True,
-        max_instances=1,
-    )
-
-    # Catch-up: if premium data is already stale (e.g. the app was down at
-    # the scheduled time, or restarts starved the old interval trigger),
-    # run a one-off premium collection shortly after startup.
+    from apscheduler.triggers.date import DateTrigger as _DateTrigger
     from datetime import datetime as _dt, timedelta as _td
 
     from sqlalchemy import func, select as _select
@@ -510,27 +523,68 @@ async def lifespan(app: FastAPI):
     from app.database import async_session_factory as _asf
     from app.models import PriceSnapshot as _PS
 
+    # Daily economy collection. Fares change continuously through the day,
+    # so one snapshot per day tracks the trend at a fraction of the API cost;
+    # the default hour lands after overnight repricing and before the digest.
+    scheduler.add_job(
+        _run_collection,
+        trigger=_CronTrigger(hour=settings.collection_hour_utc, minute=0),
+        id="price_collection",
+        name="Daily price collection (main cabin)",
+        replace_existing=True,
+        max_instances=1,
+    )
+
+    # Weekly premium collection — premium fares move slowly and cost 3x.
+    scheduler.add_job(
+        _run_premium_collection,
+        trigger=_CronTrigger(
+            day_of_week=settings.premium_collection_weekday,
+            hour=settings.premium_collection_hour_utc,
+            minute=30,
+        ),
+        id="premium_price_collection",
+        name="Weekly premium fare collection (business, first, premium economy)",
+        replace_existing=True,
+        max_instances=1,
+    )
+
+    # Startup catch-ups: if the app was down (or restarts starved the old
+    # interval triggers) past a cadence period, run one-off collections soon
+    # after boot instead of waiting for the next cron firing.
     async with _asf() as _session:
+        _last_economy = (
+            await _session.execute(
+                _select(func.max(_PS.collected_at)).where(_PS.fare_class == "main_cabin")
+            )
+        ).scalar()
         _last_premium = (
             await _session.execute(
                 _select(func.max(_PS.collected_at)).where(_PS.fare_class != "main_cabin")
             )
         ).scalar()
-    if _last_premium is None or _dt.utcnow() - _last_premium > _td(hours=25):
-        from apscheduler.triggers.date import DateTrigger as _DateTrigger
 
+    if _last_economy is None or _dt.utcnow() - _last_economy > _td(hours=26):
+        scheduler.add_job(
+            _run_collection,
+            trigger=_DateTrigger(run_date=_dt.now() + _td(seconds=60)),
+            id="economy_catchup",
+            name="One-off economy catch-up (stale data at startup)",
+            replace_existing=True,
+            max_instances=1,
+        )
+        logger.info("economy_catchup_scheduled", last_economy=str(_last_economy))
+
+    if _last_premium is None or _dt.utcnow() - _last_premium > _td(days=8):
         scheduler.add_job(
             _run_premium_collection,
-            trigger=_DateTrigger(run_date=_dt.now() + _td(seconds=90)),
+            trigger=_DateTrigger(run_date=_dt.now() + _td(seconds=120)),
             id="premium_catchup",
             name="One-off premium fare catch-up (stale data at startup)",
             replace_existing=True,
             max_instances=1,
         )
-        logger.info(
-            "premium_catchup_scheduled",
-            last_premium=str(_last_premium),
-        )
+        logger.info("premium_catchup_scheduled", last_premium=str(_last_premium))
     if settings.digest_enabled:
         from apscheduler.triggers.cron import CronTrigger
         scheduler.add_job(
@@ -565,7 +619,7 @@ async def lifespan(app: FastAPI):
     )
     scheduler.add_job(
         _check_collection_staleness,
-        trigger=IntervalTrigger(hours=6),
+        trigger=_CronTrigger(hour="*/6", minute=45),
         id="staleness_check",
         name="Alert when price collection goes stale",
         replace_existing=True,
@@ -574,7 +628,8 @@ async def lifespan(app: FastAPI):
     scheduler.start()
     logger.info(
         "Scheduler started",
-        collection_interval_hours=settings.collection_interval_hours,
+        collection_hour_utc=settings.collection_hour_utc,
+        premium_weekday=settings.premium_collection_weekday,
     )
 
     yield
@@ -670,7 +725,7 @@ async def health_check_full():
         if last_collected:
             age_hours = (datetime.utcnow() - last_collected).total_seconds() / 3600
             checks["last_collection"] = last_collected.isoformat()
-            checks["collection_stale"] = age_hours > settings.collection_interval_hours * 2
+            checks["collection_stale"] = age_hours > 30  # daily cadence + slack
         else:
             checks["last_collection"] = None
             checks["collection_stale"] = False
