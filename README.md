@@ -147,7 +147,9 @@ All three are free and take a few minutes each. SerpAPI is the primary source; t
 2. In the dashboard sidebar, open **Programs** and join the **Aviasales** program (the flight **Data API** answers under this program; ignore the Link API — that's for affiliate booking links)
 3. Click your **profile icon (top right) → Profile** (or go to `app.travelpayouts.com/profile`) and scroll to the **API token** section — click show/copy
 
-Paste each value into the matching line in `.env`, then `docker compose restart app`. Confirm they registered via the dashboard status strip or `curl localhost:8001/health/full` (each source flips to `"configured"`).
+Paste each value into the matching line in `.env`, then run `docker compose up -d app` — **not** `restart`, which keeps the old environment (env vars are baked in at container creation; `up -d` recreates the container when `.env` changed). Confirm they registered via the dashboard status strip or `curl localhost:8001/health/full` (each source flips to `"configured"`).
+
+> Note: Travelpayouts serves *cached* Aviasales prices and has thin coverage of US domestic routes — it may legitimately return no data for a domestic route while working fine for international ones. `success: true` with an empty list means the token is fine.
 
 ### Collection cadence & API quota (SerpAPI)
 
