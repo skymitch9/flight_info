@@ -4,10 +4,12 @@ A Dockerized application that monitors flight prices for user-defined travel win
 
 **Key features**
 
-- Tracks prices across each trip's actual travel window (sampled departure dates, plus return legs for round trips)
+- Tracks prices across each trip's actual travel window — wide windows are walked date-by-date over successive days (rotating sample), so a 3-month window builds full price coverage at no extra API cost
 - Claude-powered buy/wait/rising recommendations with per-departure-date price charts
-- Target price alerts: get emailed the moment a main cabin fare drops below your number
-- One combined alert email per collection cycle; separate daily digest email
+- Deal context on every alert and digest: lowest-ever flags, vs-30-day-average, and change since the last check
+- Target price alerts (round-trip total for round trips) and per-trip max-stops preferences, so alerts only reflect fares you'd actually book
+- One combined alert email per collection cycle, repeat alerts suppressed until the price actually moves; separate daily digest email
+- Nightly database backups and a dashboard status strip (API usage, last/next scan)
 - Multiple flight data sources with automatic fallback and per-source monthly quota budgets
 - Booking-horizon aware: trips more than ~330 days out are "prepared" at zero API cost and start tracking automatically once airlines publish fares
 - Self-maintaining: expired trips auto-archive, old snapshots are pruned, and you get a warning email if collection silently stops
@@ -117,6 +119,9 @@ All configuration lives in `.env` (see `.env.example` for the annotated template
 | `PREMIUM_COLLECTION_HOUR_UTC` | No | `13` | UTC hour for the premium-fare collection (auto catch-up at startup if >8 days stale) |
 | `CLOSEIN_WINDOW_DAYS` | No | `14` | Trips departing within this many days get a second daily economy collection |
 | `CLOSEIN_COLLECTION_HOUR_UTC` | No | `1` | UTC hour of the close-in evening collection (free while no trip is close-in) |
+| `ALERT_MIN_CHANGE_PCT` | No | `0.05` | Suppress repeat alerts unless the price moved this much since the last alert |
+| `BACKUP_ENABLED` | No | `true` | Nightly `pg_dump` into `db-snapshots/` (11:00 UTC) |
+| `BACKUP_RETENTION_COUNT` | No | `7` | Auto-backups kept before pruning oldest |
 | `MAX_DATES_PER_TRIP` | No | `3` | Max departure dates sampled from each trip's travel window per cycle |
 | `MAX_SEARCH_DATES_PER_ROUTE` | No | `6` | Cap on searched dates per route per cycle (bounds API quota usage) |
 | `BOOKING_HORIZON_DAYS` | No | `330` | Dates further out are not searched (airlines don't publish fares that far ahead); trips beyond it are "prepared" and start tracking automatically once in range |

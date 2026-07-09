@@ -109,6 +109,7 @@ class TripRequestType:
     carry_on_bags: int
     checked_bags: int
     target_price_cents: Optional[int]
+    max_stops: Optional[int]
     is_active: bool
     status: str
     fulfilled_at: Optional[datetime]
@@ -142,6 +143,7 @@ class TripRequestInput:
     carry_on_bags: Optional[int] = 1
     checked_bags: Optional[int] = 0
     target_price_cents: Optional[int] = None
+    max_stops: Optional[int] = None
 
 
 # --- Helper functions ---
@@ -212,11 +214,13 @@ def _map_trip_to_type(trip: TripRequest, return_snapshots: list[PriceSnapshot] |
 
     # Derive top flight options from the route's price snapshots (all fare
     # classes), restricted to this trip's departure window — the route may
-    # carry snapshots for other trips' dates and reverse-leg collections.
+    # carry snapshots for other trips' dates and reverse-leg collections —
+    # and honoring the trip's max-stops preference.
     outbound_snapshots = [
         s
         for s in all_snapshots
         if trip.earliest_departure <= s.flight_date <= trip.latest_departure
+        and (trip.max_stops is None or (s.stops or 0) <= trip.max_stops)
     ]
     top_flight_options = _derive_top_flight_options(outbound_snapshots, trip.latest_departure_time, luggage, passenger_count)
 
@@ -240,6 +244,7 @@ def _map_trip_to_type(trip: TripRequest, return_snapshots: list[PriceSnapshot] |
         carry_on_bags=trip.carry_on_bags,
         checked_bags=trip.checked_bags,
         target_price_cents=trip.target_price_cents,
+        max_stops=trip.max_stops,
         is_active=trip.is_active,
         status=trip.status,
         fulfilled_at=trip.fulfilled_at,
@@ -399,10 +404,11 @@ def _derive_round_trip_options(
     outbound_batch = _get_latest_batch(outbound_snapshots)
     return_batch = _get_latest_batch(return_snapshots)
 
-    # Filter outbound flights by date range and time constraint
+    # Filter outbound flights by date range, stops, and time constraint
     valid_outbound = [
         snap for snap in outbound_batch
         if trip.earliest_departure <= snap.flight_date <= trip.latest_departure
+        and (trip.max_stops is None or (snap.stops or 0) <= trip.max_stops)
     ]
     if trip.latest_departure_time:
         valid_outbound = [
@@ -410,10 +416,11 @@ def _derive_round_trip_options(
             if not snap.arrival_time or _extract_time(snap.arrival_time) <= trip.latest_departure_time
         ]
 
-    # Filter return flights by date range and time constraint
+    # Filter return flights by date range, stops, and time constraint
     valid_return = [
         snap for snap in return_batch
         if trip.earliest_return <= snap.flight_date <= trip.latest_return
+        and (trip.max_stops is None or (snap.stops or 0) <= trip.max_stops)
     ]
     if trip.latest_return_time:
         valid_return = [
@@ -527,11 +534,65 @@ def _extract_time(time_str: str) -> str:
     return "23:59"
 
 
+@strawberry.type
+class SystemStatusType:
+    """Operational status for the dashboard strip."""
+
+    serpapi_calls_this_month: int
+    serpapi_monthly_budget: int
+    claude_calls_this_month: int
+    last_collection: Optional[datetime]
+    next_collection: Optional[datetime]
+    digest_hour_utc: int
+
+
 # --- Query resolvers ---
 
 
 @strawberry.type
 class Query:
+    @strawberry.field
+    async def system_status(self) -> SystemStatusType:
+        """API usage (SerpAPI + Claude), collection freshness, and schedule."""
+        from datetime import datetime as dt
+
+        from sqlalchemy import func
+
+        from app.config import Settings
+        from app.models import ApiUsage, Route
+
+        settings = Settings()
+        month = dt.utcnow().strftime("%Y-%m")
+
+        async for session in get_session():
+            usage_result = await session.execute(
+                select(ApiUsage).where(ApiUsage.month == month)
+            )
+            usage = {u.source: u.calls for u in usage_result.scalars().all()}
+            last_collection = (
+                await session.execute(select(func.max(Route.last_collected_at)))
+            ).scalar()
+
+            next_collection = None
+            try:
+                from app.main import scheduler
+
+                job = scheduler.get_job("price_collection")
+                if job and job.next_run_time:
+                    next_collection = job.next_run_time.replace(tzinfo=None)
+            except Exception:  # scheduler not started (e.g. during tests)
+                pass
+
+            return SystemStatusType(
+                serpapi_calls_this_month=usage.get("SerpAPIFlightSource", 0),
+                serpapi_monthly_budget=settings.serpapi_monthly_budget,
+                claude_calls_this_month=usage.get("ClaudeAPI", 0),
+                last_collection=last_collection,
+                next_collection=next_collection,
+                digest_hour_utc=settings.digest_hour_utc,
+            )
+        raise RuntimeError("Failed to acquire database session")
+
     @strawberry.field
     async def trips(self) -> list[TripRequestType]:
         """Fetch all active trip requests with nested price history and analysis."""
@@ -691,6 +752,7 @@ class Mutation:
                         carry_on_bags=input.carry_on_bags if input.carry_on_bags is not None else 1,
                         checked_bags=input.checked_bags if input.checked_bags is not None else 0,
                         target_price_cents=input.target_price_cents,
+                        max_stops=input.max_stops,
                     )
                 )
             except TripValidationError as e:
@@ -737,6 +799,7 @@ class Mutation:
                         carry_on_bags=input.carry_on_bags if input.carry_on_bags is not None else 1,
                         checked_bags=input.checked_bags if input.checked_bags is not None else 0,
                         target_price_cents=input.target_price_cents,
+                        max_stops=input.max_stops,
                     ),
                 )
             except TripValidationError as e:

@@ -64,6 +64,7 @@ interface TripData {
     carryOnBags: number;
     checkedBags: number;
     targetPriceCents: number | null;
+    maxStops: number | null;
     collectionStartsOn: string | null;
     lastCollectedAt: string | null;
     priceHistory: PriceHistoryEntry[];
@@ -183,7 +184,13 @@ export default function TripDetail() {
             {trip.targetPriceCents != null && (
               <>
                 <span style={styles.dateLabel}>TARGET //</span>
-                <span style={styles.dateValue}>${Math.round(trip.targetPriceCents / 100)} PER TICKET (MAIN CABIN)</span>
+                <span style={styles.dateValue}>${Math.round(trip.targetPriceCents / 100)} MAIN CABIN{trip.earliestReturn ? ' (ROUND-TRIP TOTAL)' : ' PER TICKET'}</span>
+              </>
+            )}
+            {trip.maxStops != null && (
+              <>
+                <span style={{ ...styles.dateLabel, marginLeft: '1.5rem' }}>STOPS //</span>
+                <span style={styles.dateValue}>{trip.maxStops === 0 ? 'NONSTOP ONLY' : `UP TO ${trip.maxStops}`}</span>
               </>
             )}
             {trip.lastCollectedAt && (
@@ -276,6 +283,7 @@ export default function TripDetail() {
             carryOnBags: trip.carryOnBags,
             checkedBags: trip.checkedBags,
             targetPriceCents: trip.targetPriceCents,
+            maxStops: trip.maxStops,
           }}
         />
       )}

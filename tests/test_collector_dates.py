@@ -67,6 +67,36 @@ class TestSampleDates:
         start = TODAY + timedelta(days=1)
         assert len(sample_dates(start, start + timedelta(days=365), 5)) <= 5
 
+    def test_rotation_zero_keeps_endpoints(self):
+        start = TODAY + timedelta(days=10)
+        end = start + timedelta(days=90)
+        result = sample_dates(start, end, 3, rotation=0)
+        assert result[0] == start and result[-1] == end
+
+    def test_rotation_shifts_sampled_dates(self):
+        start = TODAY + timedelta(days=10)
+        end = start + timedelta(days=90)
+        day0 = sample_dates(start, end, 3, rotation=0)
+        day1 = sample_dates(start, end, 3, rotation=1)
+        assert day0 != day1
+        assert all(start <= d <= end for d in day1)
+
+    def test_rotation_walks_the_window_over_time(self):
+        """Successive daily rotations should cover many distinct dates."""
+        start = TODAY + timedelta(days=10)
+        end = start + timedelta(days=90)
+        seen: set = set()
+        for rotation in range(45):
+            seen.update(sample_dates(start, end, 3, rotation=rotation))
+        # 3 fixed dates would stay at 3; rotation should cover far more
+        assert len(seen) > 30
+        assert all(start <= d <= end for d in seen)
+
+    def test_rotation_ignored_for_small_windows(self):
+        start = TODAY + timedelta(days=10)
+        end = start + timedelta(days=1)
+        assert sample_dates(start, end, 3, rotation=7) == [start, end]
+
 
 class TestSearchDatesForRoute:
     def test_outbound_window_in_range(self):

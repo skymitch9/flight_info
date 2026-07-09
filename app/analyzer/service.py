@@ -62,12 +62,14 @@ class PriceAnalyzer:
             The persisted AnalysisResult model instance, or None when there
             is no price data to analyze.
         """
-        # Only prices within this trip's departure window are relevant —
-        # route-level collection may include dates for other trips on the route.
+        # Only prices within this trip's departure window (and stops
+        # preference) are relevant — route-level collection may include
+        # dates for other trips on the route.
         relevant_prices = [
             p
             for p in current_prices
             if trip.earliest_departure <= p.departure_date <= trip.latest_departure
+            and (trip.max_stops is None or (p.stops or 0) <= trip.max_stops)
         ]
 
         async with self.session_factory() as session:
@@ -83,6 +85,9 @@ class PriceAnalyzer:
 
             prompt = self._build_prompt(trip, relevant_prices, history)
 
+            from app.usage import record_api_usage
+
+            await record_api_usage(self.session_factory, "ClaudeAPI")
             try:
                 response = await self.llm.complete(prompt)
             except Exception as e:

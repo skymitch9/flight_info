@@ -19,11 +19,18 @@ if TYPE_CHECKING:
 logger = structlog.get_logger(__name__)
 
 
-def sample_dates(start: date, end: date, max_dates: int) -> list[date]:
+def sample_dates(start: date, end: date, max_dates: int, rotation: int = 0) -> list[date]:
     """Return up to max_dates evenly spaced dates from [start, end], inclusive.
 
-    Always includes the endpoints when they fit; dates before today are dropped
-    so expired portions of a travel window are never searched.
+    Dates before today are dropped so expired portions of a travel window are
+    never searched. Small windows return every date.
+
+    For windows wider than max_dates, `rotation` shifts the sampled dates
+    within their spacing: passing a value that changes daily (e.g.
+    date.today().toordinal()) makes successive collections walk through the
+    whole window over time, building price coverage of every date at the
+    same per-day API cost. rotation=0 reproduces the fixed
+    endpoints-and-midpoints sample.
     """
     today = date.today()
     start = max(start, today)
@@ -34,9 +41,13 @@ def sample_dates(start: date, end: date, max_dates: int) -> list[date]:
     if window_days + 1 <= max_dates:
         return [start + timedelta(days=i) for i in range(window_days + 1)]
 
-    # Evenly spaced sample including both endpoints
+    # Evenly spaced sample, shifted by the rotation offset within the spacing
     step = window_days / (max_dates - 1)
-    dates = {start + timedelta(days=round(i * step)) for i in range(max_dates)}
+    offset = rotation % max(int(step), 1)
+    dates = {
+        min(start + timedelta(days=round(i * step) + offset), end)
+        for i in range(max_dates)
+    }
     return sorted(dates)
 
 
@@ -186,12 +197,16 @@ class CollectionService:
         prepared at zero API cost until they come in range.
         """
         horizon_end = date.today() + timedelta(days=self.booking_horizon_days)
+        # Daily-changing rotation so wide windows get walked date by date
+        rotation = date.today().toordinal()
         dates: set[date] = set()
 
         def window_dates(start: date, end: date) -> list[date]:
             if start > horizon_end:
                 return []  # entire window beyond the booking horizon — not yet collectable
-            return sample_dates(start, min(end, horizon_end), self.max_dates_per_trip)
+            return sample_dates(
+                start, min(end, horizon_end), self.max_dates_per_trip, rotation=rotation
+            )
 
         for trip in active_trips:
             # Outbound legs on this route

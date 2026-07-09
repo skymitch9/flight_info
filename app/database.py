@@ -31,6 +31,8 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
 # ones). Keep names in sync with the declarations in app/models.py.
 _STARTUP_INDEX_DDL = [
     "ALTER TABLE trip_requests ADD COLUMN IF NOT EXISTS target_price_cents INTEGER",
+    "ALTER TABLE trip_requests ADD COLUMN IF NOT EXISTS max_stops INTEGER",
+    "ALTER TABLE notifications ADD COLUMN IF NOT EXISTS min_price_cents INTEGER",
     "CREATE INDEX IF NOT EXISTS ix_price_snapshots_route_collected ON price_snapshots (route_id, collected_at)",
     "CREATE INDEX IF NOT EXISTS ix_price_snapshots_trip_request_id ON price_snapshots (trip_request_id)",
     "CREATE INDEX IF NOT EXISTS ix_price_snapshots_flight_date ON price_snapshots (flight_date)",

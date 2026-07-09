@@ -37,8 +37,11 @@ class TripRequest(Base):
     passenger_count = Column(Integer, nullable=False, default=1)
     carry_on_bags = Column(Integer, nullable=False, default=1)
     checked_bags = Column(Integer, nullable=False, default=0)
-    # Alert when the cheapest main-cabin fare (per ticket) drops to/below this
+    # Alert when the cheapest main-cabin fare (per ticket; round-trip
+    # combined when return dates are set) drops to/below this
     target_price_cents = Column(Integer, nullable=True)
+    # Only consider fares with at most this many stops (NULL = any)
+    max_stops = Column(Integer, nullable=True)
     is_active = Column(Boolean, default=True)
     route_id = Column(Integer, ForeignKey("routes.id"), nullable=True)  # nullable during migration, enforced after
     status = Column(String(10), nullable=False, default="active")  # "active" | "fulfilled"
@@ -126,6 +129,9 @@ class Notification(Base):
     trip_request_id = Column(Integer, ForeignKey("trip_requests.id"), nullable=False)
     sent_at = Column(DateTime, default=datetime.utcnow)
     status = Column(String(10), nullable=False)  # "sent" | "failed"
+    # Cheapest qualifying fare at alert time — used to suppress repeat
+    # alerts when the price hasn't meaningfully changed
+    min_price_cents = Column(Integer, nullable=True)
 
     __table_args__ = (
         Index("ix_notifications_trip_sent", "trip_request_id", "sent_at"),

@@ -1,5 +1,10 @@
 FROM python:3.12-slim
 
+# pg_dump for the nightly database backup job
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 COPY requirements.txt .

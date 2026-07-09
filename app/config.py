@@ -49,6 +49,14 @@ class Settings(BaseSettings):
     closein_window_days: int = 14
     closein_collection_hour_utc: int = 1
 
+    # Suppress repeat alerts unless the cheapest qualifying fare moved by at
+    # least this fraction since the last alert (target hits included)
+    alert_min_change_pct: float = 0.05
+
+    # Nightly pg_dump into db-snapshots/ (mounted at /backups in the container)
+    backup_enabled: bool = True
+    backup_retention_count: int = 7
+
     # Collection date sampling — bounds API quota usage per cycle.
     # Each trip contributes up to max_dates_per_trip evenly spaced dates from
     # its travel window; each route searches at most max_search_dates_per_route.

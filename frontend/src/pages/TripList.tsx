@@ -1,8 +1,21 @@
 import { useState } from 'react';
 import { useQuery, useMutation } from '@apollo/client/react';
 import { Link } from 'react-router-dom';
-import { GET_TRIPS, TRIGGER_COLLECTION } from '../graphql/queries';
+import { GET_TRIPS, GET_SYSTEM_STATUS, TRIGGER_COLLECTION } from '../graphql/queries';
 import TripForm from '../components/TripForm';
+
+interface SystemStatus {
+  serpapiCallsThisMonth: number;
+  serpapiMonthlyBudget: number;
+  claudeCallsThisMonth: number;
+  lastCollection: string | null;
+  nextCollection: string | null;
+  digestHourUtc: number;
+}
+
+interface SystemStatusData {
+  systemStatus: SystemStatus;
+}
 
 interface AnalysisResult {
   recommendation: string;
@@ -61,6 +74,7 @@ export default function TripList() {
   const [showForm, setShowForm] = useState(false);
   const [scanStatus, setScanStatus] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
   const { data, loading, error } = useQuery<TripsData>(GET_TRIPS);
+  const { data: statusData } = useQuery<SystemStatusData>(GET_SYSTEM_STATUS);
   const [triggerCollection] = useMutation(TRIGGER_COLLECTION, {
     refetchQueries: [{ query: GET_TRIPS }],
   });
@@ -134,6 +148,29 @@ export default function TripList() {
       {scanStatus === 'error' && (
         <div style={{ ...styles.scanBanner, borderColor: '#FF003C', color: '#FF003C' }}>
           ✗ SCAN FAILED — CHECK SYSTEM LOGS
+        </div>
+      )}
+
+      {/* System status strip */}
+      {statusData?.systemStatus && (
+        <div style={styles.statusStrip}>
+          <span>
+            SERPAPI {statusData.systemStatus.serpapiCallsThisMonth}
+            {statusData.systemStatus.serpapiMonthlyBudget > 0 && `/${statusData.systemStatus.serpapiMonthlyBudget}`} THIS MONTH
+          </span>
+          <span>CLAUDE {statusData.systemStatus.claudeCallsThisMonth} CALLS</span>
+          {statusData.systemStatus.lastCollection && (
+            <span>LAST SCAN {formatAgo(statusData.systemStatus.lastCollection) ?? '—'}</span>
+          )}
+          {statusData.systemStatus.nextCollection && (
+            <span>
+              NEXT SCAN {new Date(
+                statusData.systemStatus.nextCollection.endsWith('Z')
+                  ? statusData.systemStatus.nextCollection
+                  : statusData.systemStatus.nextCollection + 'Z'
+              ).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })}
+            </span>
+          )}
         </div>
       )}
 
@@ -376,5 +413,15 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'inline-block',
     animation: 'flicker 1s infinite',
     marginRight: '0.5rem',
+  },
+  statusStrip: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: '1.5rem',
+    fontFamily: "'Share Tech Mono', monospace",
+    fontSize: '0.65rem',
+    color: '#555577',
+    letterSpacing: '1px',
+    marginBottom: '0.75rem',
   },
 };

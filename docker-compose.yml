@@ -28,6 +28,9 @@ services:
     environment:
       # Always use the bundled Postgres container, regardless of .env
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/flight_tracker
+    volumes:
+      # Nightly pg_dump backups land here (see BACKUP_* settings)
+      - ./db-snapshots:/backups
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
       interval: 30s

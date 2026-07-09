@@ -63,16 +63,19 @@ class NotificationService:
         analysis: AnalysisResult,
         prices: list[FlightPrice],
         force_reason: str | None = None,
+        deal_note: str | None = None,
+        current_min_cents: int | None = None,
     ) -> dict | None:
         """Build an alert section for a trip, or None if no alert is due.
 
         An alert is due when the recommendation is not WAIT (or force_reason
-        is set, e.g. the trip's target price was hit) and the trip has not
-        been notified within the last 24 hours.
+        is set, e.g. the trip's target price was hit), the trip has not been
+        notified within the last 24 hours, and the price has moved
+        meaningfully since the last alert (change gate).
 
         Returns:
             A dict with keys trip/analysis/main_cabin_options/
-            premium_highlights/target_note, or None.
+            premium_highlights/target_note/deal_note/min_price_cents, or None.
         """
         if force_reason is None and analysis.recommendation == Recommendation.WAIT.value:
             logger.info(
@@ -89,6 +92,21 @@ class NotificationService:
                 )
                 return None
 
+            # Change gate: don't repeat an alert when the price is where it
+            # was last time we emailed about this trip
+            if current_min_cents is not None:
+                last_alerted = await self._last_alerted_price(session, trip.id)
+                if last_alerted:
+                    change = abs(current_min_cents - last_alerted) / last_alerted
+                    if change < self.settings.alert_min_change_pct:
+                        logger.info(
+                            "Skipping notification: price unchanged since last alert",
+                            trip_id=trip.id,
+                            last_alerted=last_alerted,
+                            current=current_min_cents,
+                        )
+                        return None
+
         main_cabin_prices = [p for p in prices if p.fare_class == "main_cabin"]
         return {
             "trip": trip,
@@ -96,7 +114,22 @@ class NotificationService:
             "main_cabin_options": self.tier_engine.filter_options(main_cabin_prices),
             "premium_highlights": self.tier_engine.identify_premium_highlights(prices),
             "target_note": force_reason,
+            "deal_note": deal_note,
+            "min_price_cents": current_min_cents,
         }
+
+    async def _last_alerted_price(self, session: AsyncSession, trip_id: int) -> int | None:
+        """The qualifying price recorded on the trip's most recent sent alert."""
+        stmt = (
+            select(Notification.min_price_cents)
+            .where(Notification.trip_request_id == trip_id)
+            .where(Notification.status == "sent")
+            .where(Notification.min_price_cents.isnot(None))
+            .order_by(Notification.sent_at.desc())
+            .limit(1)
+        )
+        result = await session.execute(stmt)
+        return result.scalar_one_or_none()
 
     async def send_alerts(self, alerts: list[dict]) -> None:
         """Send a single combined email covering all due alerts.
@@ -125,6 +158,7 @@ class NotificationService:
                         trip_request_id=alert["trip"].id,
                         sent_at=datetime.utcnow(),
                         status=status,
+                        min_price_cents=alert.get("min_price_cents"),
                     )
                 )
             await session.commit()

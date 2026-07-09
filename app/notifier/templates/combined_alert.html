@@ -27,6 +27,12 @@
             </div>
             {% endif %}
 
+            {% if alert.deal_note %}
+            <div style="background-color: #eef4fd; border-left: 4px solid #1a73e8; padding: 10px 14px; margin-bottom: 12px; color: #174ea6; font-size: 13px;">
+                📉 {{ alert.deal_note }}
+            </div>
+            {% endif %}
+
             <div style="margin-bottom: 12px;">
                 <span style="display: inline-block; background-color: #1a73e8; color: #ffffff; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; padding: 3px 10px; border-radius: 12px;">
                     {{ alert.analysis.recommendation.replace('_', ' ') }}

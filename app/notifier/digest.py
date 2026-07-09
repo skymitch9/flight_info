@@ -64,6 +64,8 @@ class DailyDigestService:
         )
         trips = result.scalars().all()
 
+        from app.analyzer.deal_context import compute_deal_context, describe_deal
+
         trip_data = []
         for trip in trips:
             snapshots = trip.route.price_snapshots if trip.route else []
@@ -72,10 +74,21 @@ class DailyDigestService:
             if trip.analysis_results:
                 latest_analysis = max(trip.analysis_results, key=lambda a: a.analyzed_at)
 
+            # Deal context over bookable main-cabin fares in the trip window
+            history = [
+                s
+                for s in snapshots
+                if s.fare_class == "main_cabin"
+                and trip.earliest_departure <= s.flight_date <= trip.latest_departure
+                and (trip.max_stops is None or (s.stops or 0) <= trip.max_stops)
+            ]
+            deal_note = describe_deal(compute_deal_context(history))
+
             trip_data.append({
                 "trip": trip,
                 "top_flights": top_flights,
                 "analysis": latest_analysis,
+                "deal_note": deal_note,
             })
 
         return trip_data
@@ -94,6 +107,10 @@ class DailyDigestService:
             for s in snapshots
             if trip.earliest_departure <= s.flight_date <= trip.latest_departure
         ]
+
+        # Honor the trip's max-stops preference
+        if trip.max_stops is not None:
+            snapshots = [s for s in snapshots if (s.stops or 0) <= trip.max_stops]
 
         # Get latest batch per fare class (main_cabin only for digest)
         main_cabin = [s for s in snapshots if s.fare_class == "main_cabin"]
@@ -205,7 +222,8 @@ class DailyDigestService:
                     <span style="font-family:Orbitron,sans-serif;font-size:14px;color:#e0e0e0;letter-spacing:2px;">{route}</span>
                     <span style="font-family:monospace;font-size:11px;color:#00F0FF;border:1px solid #00F0FF;padding:2px 8px;">{rec}</span>
                 </div>
-                <div style="font-family:monospace;font-size:11px;color:#555577;margin-bottom:10px;">{dates} • {trip.passenger_count} pax • {trip.carry_on_bags} carry-on • {trip.checked_bags} checked</div>
+                <div style="font-family:monospace;font-size:11px;color:#555577;margin-bottom:10px;">{dates} • {trip.passenger_count} pax • {trip.carry_on_bags} carry-on • {trip.checked_bags} checked{f" • ≤{trip.max_stops} stops" if trip.max_stops is not None else ""}</div>
+                {f'<div style="font-family:monospace;font-size:11px;color:#00F0FF;margin-bottom:10px;">📉 {td["deal_note"]}</div>' if td.get("deal_note") else ""}
                 <table style="width:100%;border-collapse:collapse;font-size:12px;">
                     <tr style="border-bottom:1px solid #2a2a4a;">
                         <th style="text-align:left;padding:4px 10px;color:#555577;font-size:10px;">FLIGHT</th>

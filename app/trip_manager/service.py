@@ -46,6 +46,7 @@ class TripInput:
     carry_on_bags: int = 1
     checked_bags: int = 0
     target_price_cents: Optional[int] = None
+    max_stops: Optional[int] = None  # None = any number of stops
 
 
 _IATA_CODE_PATTERN = re.compile(r"^[A-Z]{3}$")
@@ -81,6 +82,7 @@ class TripService:
             carry_on_bags=input.carry_on_bags,
             checked_bags=input.checked_bags,
             target_price_cents=input.target_price_cents,
+            max_stops=input.max_stops,
             is_active=True,
             route_id=route.id,
         )
@@ -161,6 +163,7 @@ class TripService:
         trip.carry_on_bags = input.carry_on_bags
         trip.checked_bags = input.checked_bags
         trip.target_price_cents = input.target_price_cents
+        trip.max_stops = input.max_stops
         await self.session.commit()
         await self.session.refresh(trip)
         return trip
@@ -294,4 +297,11 @@ class TripService:
             raise TripValidationError(
                 "Target price must be greater than zero",
                 field="target_price_cents",
+            )
+
+        # Max stops validation (optional; None = any)
+        if input.max_stops is not None and not (0 <= input.max_stops <= 3):
+            raise TripValidationError(
+                "Max stops must be between 0 and 3",
+                field="max_stops",
             )

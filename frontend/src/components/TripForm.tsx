@@ -18,6 +18,7 @@ interface TripData {
   carryOnBags?: number | null;
   checkedBags?: number | null;
   targetPriceCents?: number | null;
+  maxStops?: number | null;
 }
 
 interface TripFormProps {
@@ -68,6 +69,9 @@ export default function TripForm({ onClose, existingTrip }: TripFormProps) {
   const [checkedBags, setCheckedBags] = useState<number>(existingTrip?.checkedBags ?? 0);
   const [targetPrice, setTargetPrice] = useState<string>(
     existingTrip?.targetPriceCents ? String(existingTrip.targetPriceCents / 100) : ''
+  );
+  const [maxStops, setMaxStops] = useState<string>(
+    existingTrip?.maxStops != null ? String(existingTrip.maxStops) : ''
   );
   const [errors, setErrors] = useState<FormErrors>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -138,6 +142,7 @@ export default function TripForm({ onClose, existingTrip }: TripFormProps) {
       carryOnBags,
       checkedBags,
       targetPriceCents: targetPrice ? Math.round(Number(targetPrice) * 100) : null,
+      maxStops: maxStops !== '' ? Number(maxStops) : null,
     };
 
     if (isEditMode && existingTrip) {
@@ -326,10 +331,10 @@ export default function TripForm({ onClose, existingTrip }: TripFormProps) {
             </div>
           </div>
 
-          {/* Target Price */}
+          {/* Target Price & Max Stops */}
           <div style={styles.row}>
             <div style={styles.field}>
-              <label style={styles.label}>TARGET PRICE $ <span style={styles.optional}>(OPT — ALERT WHEN A MAIN CABIN FARE DROPS TO/BELOW THIS, PER TICKET)</span></label>
+              <label style={styles.label}>TARGET PRICE $ <span style={styles.optional}>(OPT — MAIN CABIN, PER TICKET; ROUND-TRIP TOTAL IF RETURN SET)</span></label>
               <input
                 className="cp-input"
                 style={styles.input}
@@ -341,6 +346,20 @@ export default function TripForm({ onClose, existingTrip }: TripFormProps) {
                 onChange={(e) => setTargetPrice(e.target.value)}
               />
               {errors.targetPrice && <span style={styles.error}>{errors.targetPrice}</span>}
+            </div>
+            <div style={styles.field}>
+              <label style={styles.label}>MAX STOPS <span style={styles.optional}>(OPT)</span></label>
+              <select
+                className="cp-input"
+                style={styles.input}
+                value={maxStops}
+                onChange={(e) => setMaxStops(e.target.value)}
+              >
+                <option value="">Any</option>
+                <option value="0">Nonstop only</option>
+                <option value="1">Up to 1 stop</option>
+                <option value="2">Up to 2 stops</option>
+              </select>
             </div>
           </div>
 

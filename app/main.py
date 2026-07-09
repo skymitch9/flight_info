@@ -183,6 +183,66 @@ async def _run_maintenance() -> None:
         await session.commit()
 
 
+async def _run_backup() -> None:
+    """Nightly pg_dump into /backups (mounted from db-snapshots/ on the host).
+
+    Keeps the newest backup_retention_count files; older auto-backups are
+    pruned. Manually created snapshots (different name pattern) are left alone.
+    """
+    import asyncio
+    import re
+    from datetime import date
+    from pathlib import Path
+    from urllib.parse import urlparse
+
+    settings = Settings()
+    if not settings.backup_enabled:
+        return
+
+    backup_dir = Path("/backups")
+    if not backup_dir.is_dir():
+        logger.warning("backup_skipped", reason="/backups not mounted")
+        return
+
+    # postgresql+asyncpg://user:pass@host:port/db
+    url = urlparse(settings.database_url.replace("+asyncpg", ""))
+    outfile = backup_dir / f"auto_backup_{date.today().isoformat()}.sql"
+
+    proc = await asyncio.create_subprocess_exec(
+        "pg_dump",
+        "-h", url.hostname or "db",
+        "-p", str(url.port or 5432),
+        "-U", url.username or "postgres",
+        "-d", (url.path or "/flight_tracker").lstrip("/"),
+        "-f", str(outfile),
+        env={"PGPASSWORD": url.password or ""},
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        logger.error("backup_failed", error=stderr.decode()[:300])
+        return
+
+    # Prune old auto-backups beyond the retention count
+    auto_backups = sorted(
+        (p for p in backup_dir.glob("auto_backup_*.sql") if re.match(r"auto_backup_\d{4}-\d{2}-\d{2}\.sql", p.name)),
+        reverse=True,
+    )
+    for old in auto_backups[settings.backup_retention_count:]:
+        try:
+            old.unlink()
+        except OSError:
+            pass
+
+    logger.info(
+        "backup_complete",
+        file=outfile.name,
+        size_kb=outfile.stat().st_size // 1024,
+        kept=min(len(auto_backups), settings.backup_retention_count),
+    )
+
+
 # In-memory throttle for staleness alerts (at most one per 24h per process)
 _last_staleness_alert = None
 
@@ -418,12 +478,26 @@ async def _run_collection_for_classes(
                 snap_result = await session.execute(snap_stmt)
                 all_snapshots = snap_result.scalars().all()
 
+                # Honor the trip's max-stops preference — alerts and deal
+                # context should only reflect fares the user would book
+                if trip.max_stops is not None:
+                    all_snapshots = [
+                        s for s in all_snapshots if (s.stops or 0) <= trip.max_stops
+                    ]
+
                 # Keep only the most recent collection batch (5-minute window)
                 snapshots = []
                 if all_snapshots:
                     latest = all_snapshots[0].collected_at
                     cutoff = latest - timedelta(minutes=5)
                     snapshots = [s for s in all_snapshots if s.collected_at >= cutoff]
+
+                # Deal context: how the current price compares to history
+                from app.analyzer.deal_context import compute_deal_context, describe_deal
+
+                main_history = [s for s in all_snapshots if s.fare_class == "main_cabin"]
+                deal_ctx = compute_deal_context(main_history)
+                deal_note = describe_deal(deal_ctx)
 
                 # Convert snapshots to FlightPrice objects for the notifier
                 from app.collector.base import FlightPrice
@@ -439,21 +513,32 @@ async def _run_collection_for_classes(
                         origin=trip.origin,
                         destination=trip.destination,
                         departure_date=s.flight_date,
+                        stops=s.stops or 0,
                     )
                     for s in snapshots
                 ]
 
-                # Target price check: alert when the cheapest main-cabin fare
-                # (per ticket) is at or below the trip's target, regardless of
-                # the LLM recommendation.
+                # Target price check: alert when the cheapest qualifying
+                # main-cabin fare is at or below the trip's target, regardless
+                # of the LLM recommendation. One-way trips compare the one-way
+                # fare; round trips compare the combined outbound+return pair,
+                # matching how the ticket is actually bought.
+                out_min = deal_ctx.latest_min_cents
                 force_reason = None
-                if trip.target_price_cents:
-                    main_fares = [
-                        p.price_cents for p in prices if p.fare_class == "main_cabin"
-                    ]
-                    if main_fares and min(main_fares) <= trip.target_price_cents:
+                if trip.target_price_cents and out_min is not None:
+                    if trip.earliest_return is not None:
+                        ret_min = await _cheapest_return_fare(session, trip)
+                        if ret_min is not None:
+                            combined = out_min + ret_min
+                            if combined <= trip.target_price_cents:
+                                force_reason = (
+                                    f"A round trip at ${combined / 100:.0f} "
+                                    f"(${out_min / 100:.0f} out + ${ret_min / 100:.0f} back) "
+                                    f"is at or below your ${trip.target_price_cents / 100:.0f} target."
+                                )
+                    elif out_min <= trip.target_price_cents:
                         force_reason = (
-                            f"A main cabin fare at ${min(main_fares) / 100:.0f} is at or "
+                            f"A main cabin fare at ${out_min / 100:.0f} is at or "
                             f"below your ${trip.target_price_cents / 100:.0f} target price."
                         )
 
@@ -462,6 +547,8 @@ async def _run_collection_for_classes(
                     analysis=latest_analysis,
                     prices=prices,
                     force_reason=force_reason,
+                    deal_note=deal_note,
+                    current_min_cents=out_min,
                 )
                 if alert is not None:
                     pending_alerts.append(alert)
@@ -471,6 +558,46 @@ async def _run_collection_for_classes(
 
     except Exception as exc:
         logger.error("scheduled_collection_failed", error=str(exc))
+
+
+async def _cheapest_return_fare(session, trip) -> int | None:
+    """Cheapest main-cabin return-leg fare for a round trip.
+
+    Looks at the reverse route's latest collection batch, restricted to the
+    trip's return window and max-stops preference.
+    """
+    from datetime import timedelta
+
+    from sqlalchemy import select
+
+    from app.models import PriceSnapshot, Route
+
+    reverse_route = (
+        await session.execute(
+            select(Route).where(
+                Route.origin == trip.destination, Route.destination == trip.origin
+            )
+        )
+    ).scalar_one_or_none()
+    if reverse_route is None:
+        return None
+
+    result = await session.execute(
+        select(PriceSnapshot)
+        .where(PriceSnapshot.route_id == reverse_route.id)
+        .where(PriceSnapshot.fare_class == "main_cabin")
+        .where(PriceSnapshot.flight_date >= trip.earliest_return)
+        .where(PriceSnapshot.flight_date <= (trip.latest_return or trip.earliest_return))
+        .order_by(PriceSnapshot.collected_at.desc())
+    )
+    snaps = result.scalars().all()
+    if trip.max_stops is not None:
+        snaps = [s for s in snaps if (s.stops or 0) <= trip.max_stops]
+    if not snaps:
+        return None
+
+    cutoff = snaps[0].collected_at - timedelta(minutes=5)
+    return min(s.price_cents for s in snaps if s.collected_at >= cutoff)
 
 
 def trigger_early_collection() -> None:
@@ -648,6 +775,14 @@ async def lifespan(app: FastAPI):
         trigger=_StartupDateTrigger(run_date=_dt.now() + _td(seconds=30)),
         id="startup_maintenance",
         name="Maintenance catch-up at startup",
+        replace_existing=True,
+        max_instances=1,
+    )
+    scheduler.add_job(
+        _run_backup,
+        trigger=_CronTrigger(hour=11, minute=0),
+        id="nightly_backup",
+        name="Nightly database backup (pg_dump to db-snapshots/)",
         replace_existing=True,
         max_instances=1,
     )

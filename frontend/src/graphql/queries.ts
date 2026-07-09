@@ -17,6 +17,7 @@ export const GET_TRIPS = gql`
       carryOnBags
       checkedBags
       targetPriceCents
+      maxStops
       collectionStartsOn
       lastCollectedAt
       latestAnalysis {
@@ -24,6 +25,19 @@ export const GET_TRIPS = gql`
         explanation
         analyzedAt
       }
+    }
+  }
+`;
+
+export const GET_SYSTEM_STATUS = gql`
+  query GetSystemStatus {
+    systemStatus {
+      serpapiCallsThisMonth
+      serpapiMonthlyBudget
+      claudeCallsThisMonth
+      lastCollection
+      nextCollection
+      digestHourUtc
     }
   }
 `;
@@ -45,6 +59,7 @@ export const GET_TRIP_DETAIL = gql`
       carryOnBags
       checkedBags
       targetPriceCents
+      maxStops
       collectionStartsOn
       lastCollectedAt
       status
